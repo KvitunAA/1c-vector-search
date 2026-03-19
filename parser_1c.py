@@ -25,7 +25,7 @@ class BSLParser:
         r"\s+(?P<name>\w+)\s*\((?P<params>[^)]*)\)"
         r"\s*(?P<export>Экспорт|Export)?"
         r"\s*\n(?P<body>.*?)"
-        r"\n\s*Конец(?:Процедуры|Функции)|EndProcedure|EndFunction",
+        r"\n\s*(?:Конец(?:Процедуры|Функции)|EndProcedure|EndFunction)",
         re.IGNORECASE | re.DOTALL,
     )
 
@@ -52,45 +52,70 @@ class BSLParser:
 
         chunks = []
         for match in cls._METHOD_RE.finditer(content_clean):
-            directives_block = match.group("directives") or ""
-            method_type = match.group("type").capitalize()
-            if method_type in ("Procedure", "Function"):
-                method_type = "Процедура" if method_type == "Procedure" else "Функция"
-            method_name = match.group("name")
-            params = match.group("params").strip()
-            is_export = match.group("export") is not None
-            body = match.group("body")
+            try:
+                method_type_raw = match.group("type")
+                if method_type_raw is None:
+                    logger.warning(
+                        "Пропуск совпадения: группа 'type' пуста в %s, фрагмент: %s",
+                        file_path,
+                        repr(match.group(0)[:200]) if match.group(0) else "пусто",
+                    )
+                    continue
 
-            directive = ""
-            dir_match = cls._DIRECTIVE_RE.search(directives_block)
-            if dir_match:
-                directive = dir_match.group(1)
+                directives_block = match.group("directives") or ""
+                method_type = method_type_raw.capitalize()
+                if method_type in ("Procedure", "Function"):
+                    method_type = "Процедура" if method_type == "Procedure" else "Функция"
+                method_name = match.group("name")
+                if method_name is None:
+                    logger.warning(
+                        "Пропуск совпадения: группа 'name' пуста в %s, фрагмент: %s",
+                        file_path,
+                        repr(match.group(0)[:200]) if match.group(0) else "пусто",
+                    )
+                    continue
+                params = (match.group("params") or "").strip()
+                is_export = match.group("export") is not None
+                body = match.group("body") or ""
 
-            start_pos = match.start()
-            lines_before = content_clean[:start_pos].split('\n')
-            comments = []
-            for line in reversed(lines_before[-10:]):
-                line = line.strip()
-                if line.startswith('//'):
-                    comments.insert(0, line[2:].strip())
-                elif line and not line.startswith('&'):
-                    break
+                directive = ""
+                dir_match = cls._DIRECTIVE_RE.search(directives_block)
+                if dir_match:
+                    directive = dir_match.group(1)
 
-            end_keyword = "КонецПроцедуры" if "процедур" in method_type.lower() else "КонецФункции"
-            full_code = match.group(0) + '\n' + end_keyword
+                start_pos = match.start()
+                lines_before = content_clean[:start_pos].split('\n')
+                comments = []
+                for line in reversed(lines_before[-10:]):
+                    line = line.strip()
+                    if line.startswith('//'):
+                        comments.insert(0, line[2:].strip())
+                    elif line and not line.startswith('&'):
+                        break
 
-            chunks.append({
-                "method_type": method_type,
-                "method_name": method_name,
-                "params": params,
-                "signature": f"{method_type} {method_name}({params})",
-                "is_export": is_export,
-                "directive": directive,
-                "code": full_code,
-                "body": body,
-                "comments": comments,
-                "file_path": str(file_path),
-            })
+                end_keyword = "КонецПроцедуры" if "процедур" in method_type.lower() else "КонецФункции"
+                full_code = match.group(0) + '\n' + end_keyword
+
+                chunks.append({
+                    "method_type": method_type,
+                    "method_name": method_name,
+                    "params": params,
+                    "signature": f"{method_type} {method_name}({params})",
+                    "is_export": is_export,
+                    "directive": directive,
+                    "code": full_code,
+                    "body": body,
+                    "comments": comments,
+                    "file_path": str(file_path),
+                })
+            except (AttributeError, TypeError) as e:
+                logger.warning(
+                    "Пропуск совпадения при парсинге %s: %s, фрагмент: %s",
+                    file_path,
+                    e,
+                    repr(match.group(0)[:200]) if match.group(0) else "пусто",
+                )
+                continue
 
         if not chunks and content.strip():
             chunks.append({
@@ -351,14 +376,22 @@ class ConfigurationScanner:
         """Сканирование всех BSL модулей в конфигурации"""
         results = []
         for bsl_file in self.config_path.rglob("*.bsl"):
-            relative_path = bsl_file.relative_to(self.config_path)
-            parts = relative_path.parts
-            object_type = parts[0] if len(parts) > 0 else "Unknown"
-            object_name = parts[1] if len(parts) > 1 else bsl_file.stem
-            methods = self.bsl_parser.parse_module(bsl_file)
-            if methods:
-                results.append((bsl_file, f"{object_type}.{object_name}", methods))
-                logger.info(f"Найдено {len(methods)} методов в {relative_path}")
+            try:
+                relative_path = bsl_file.relative_to(self.config_path)
+                parts = relative_path.parts
+                object_type = parts[0] if len(parts) > 0 else "Unknown"
+                object_name = parts[1] if len(parts) > 1 else bsl_file.stem
+                methods = self.bsl_parser.parse_module(bsl_file)
+                if methods:
+                    results.append((bsl_file, f"{object_type}.{object_name}", methods))
+                    logger.info(f"Найдено {len(methods)} методов в {relative_path}")
+            except Exception as e:
+                logger.error(
+                    "Ошибка при сканировании модуля %s: %s",
+                    bsl_file,
+                    e,
+                    exc_info=True,
+                )
         return results
 
     def scan_all_metadata(self) -> List[Dict]:
