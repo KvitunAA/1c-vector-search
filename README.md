@@ -165,7 +165,7 @@ EMBEDDING_ADD_EOS_MANUAL=false
 | `BATCH_SIZE_METADATA` | В `.env` профиля | Размер батча при индексации метаданных. По умолчанию: `50`. Для 8 GB RAM: `20` |
 | `BATCH_SIZE_FORMS` | В `.env` профиля | Размер батча при индексации форм. По умолчанию: `50`. Для 8 GB RAM: `20` |
 
-> **Батчи и производительность:** больший батч = быстрее индексация (меньше запросов к API/модели), но выше пиковое потребление RAM. Рекомендации по конфигурациям ПК — в [MODEL_CONFIGURATION_RECOMMENDATIONS.md](projects/your_project/MODEL_CONFIGURATION_RECOMMENDATIONS.md), раздел 2.5.
+> **Батчи и производительность:** больший батч = быстрее индексация (меньше запросов к API/модели), но выше пиковое потребление RAM. Рекомендации по конфигурациям ПК — в [MODEL_CONFIGURATION_RECOMMENDATIONS.md](projects/your_project/MODEL_CONFIGURATION_RECOMMENDATIONS.md), раздел 2.6.
 
 ### Пример для nomic-embed-text-v2-moe (Context Length 512 токенов)
 
