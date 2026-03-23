@@ -118,7 +118,7 @@ class TestConfigChunking:
         import importlib
         import config
         importlib.reload(config)
-        assert config.Config.CHUNK_MAX_CHARS == 1024
+        assert config.Config.CHUNK_MAX_CHARS == int(512 * config.Config.CHARS_PER_TOKEN)
 
     def test_chunk_max_tokens_overrides(self, monkeypatch):
         monkeypatch.setenv("CHUNK_MAX_TOKENS", "512")
@@ -127,4 +127,14 @@ class TestConfigChunking:
         import config
         importlib.reload(config)
         assert config.Config.CHUNK_MAX_TOKENS == 512
-        assert config.Config.CHUNK_MAX_CHARS == int(512 * 2.0)
+        assert config.Config.CHUNK_MAX_CHARS == int(512 * config.Config.CHARS_PER_TOKEN)
+
+    def test_chars_per_token_env(self, monkeypatch):
+        monkeypatch.setenv("CHARS_PER_TOKEN", "1.5")
+        monkeypatch.setenv("CHUNK_MAX_TOKENS", "512")
+        monkeypatch.setenv("PROJECT_PROFILE", "default")
+        import importlib
+        import config
+        importlib.reload(config)
+        assert config.Config.CHARS_PER_TOKEN == 1.5
+        assert config.Config.CHUNK_MAX_CHARS == int(512 * 1.5)

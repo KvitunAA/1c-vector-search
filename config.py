@@ -136,22 +136,34 @@ class Config:
     EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", "")
     EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", "dummy")
     EMBEDDING_ADD_EOS_MANUAL = os.getenv("EMBEDDING_ADD_EOS_MANUAL", "false").lower() in ("true", "1", "yes")
-    _CHARS_PER_TOKEN = 2.0
+    # Эвристика «символов на токен» для перевода лимитов токенов в обрезку по длине строки.
+    # 2.0 близко к латинице; для русского и длинных идентификаторов BSL токенов на строку больше — ставьте 1.5–1.7,
+    # иначе движок (LM Studio / llama.cpp) тихо обрежет после лимита модели.
+    _chars_per_token_env = os.getenv("CHARS_PER_TOKEN", "1.65").strip().replace(",", ".")
+    try:
+        CHARS_PER_TOKEN = float(_chars_per_token_env)
+    except ValueError:
+        CHARS_PER_TOKEN = 1.65
     _chunk_max_tokens = os.getenv("CHUNK_MAX_TOKENS", "")
     _chunk_max_chars_env = os.getenv("CHUNK_MAX_CHARS", "0")
     CHUNK_MAX_TOKENS = int(_chunk_max_tokens) if _chunk_max_tokens and _chunk_max_tokens.isdigit() else 0
+    _chunk_max_chars_parsed = (
+        int(_chunk_max_chars_env)
+        if _chunk_max_chars_env and _chunk_max_chars_env.isdigit()
+        else 0
+    )
     CHUNK_MAX_CHARS = (
-        int(CHUNK_MAX_TOKENS * _CHARS_PER_TOKEN) if CHUNK_MAX_TOKENS
-        else int(_chunk_max_chars_env) if _chunk_max_chars_env and _chunk_max_chars_env.isdigit()
-        else 1024
+        int(CHUNK_MAX_TOKENS * CHARS_PER_TOKEN) if CHUNK_MAX_TOKENS
+        else _chunk_max_chars_parsed if _chunk_max_chars_parsed > 0
+        else int(512 * CHARS_PER_TOKEN)
     )
     CHUNK_OVERLAP_TOKENS = int(os.getenv("CHUNK_OVERLAP_TOKENS", "100"))
-    CHUNK_OVERLAP_CHARS = int(CHUNK_OVERLAP_TOKENS * _CHARS_PER_TOKEN)
+    CHUNK_OVERLAP_CHARS = int(CHUNK_OVERLAP_TOKENS * CHARS_PER_TOKEN)
     _max_tokens_str = os.getenv("EMBEDDING_MAX_TOKENS", "")
     _max_chars_env = os.getenv("EMBEDDING_MAX_CHARS", "0")
     EMBEDDING_MAX_TOKENS = int(_max_tokens_str) if _max_tokens_str and _max_tokens_str.isdigit() else 0
     EMBEDDING_MAX_CHARS = (
-        int(EMBEDDING_MAX_TOKENS * _CHARS_PER_TOKEN) if EMBEDDING_MAX_TOKENS
+        int(EMBEDDING_MAX_TOKENS * CHARS_PER_TOKEN) if EMBEDDING_MAX_TOKENS
         else int(_max_chars_env)
     )
 
@@ -235,6 +247,7 @@ class Config:
                 )
             else:
                 logger.info("EMBEDDING_ADD_EOS_MANUAL: false (EOS добавляется llama.cpp автоматически)")
+        logger.info(f"CHARS_PER_TOKEN (эвристика для лимитов): {cls.CHARS_PER_TOKEN}")
         if cls.EMBEDDING_MAX_TOKENS:
             logger.info(f"EMBEDDING_MAX_TOKENS: {cls.EMBEDDING_MAX_TOKENS} → EMBEDDING_MAX_CHARS: {cls.EMBEDDING_MAX_CHARS}")
         elif cls.EMBEDDING_MAX_CHARS > 0:
