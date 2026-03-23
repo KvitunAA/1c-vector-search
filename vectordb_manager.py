@@ -138,7 +138,13 @@ class VectorDBManager:
             ids = []
             for j, chunk in enumerate(batch):
                 text_parts = []
-                if chunk.get("comments"):
+                chunk_index = chunk.get("chunk_index", 0)
+                total_chunks = chunk.get("total_chunks", 1)
+                # Во 2+ чанках длинной процедуры не повторяем «шапку» из комментариев —
+                # иначе эмбеддинг заполняется одним и тем же блоком // Параметры… и хуже
+                # отражает уникальный код (см. README).
+                include_comments = total_chunks <= 1 or chunk_index == 0
+                if include_comments and chunk.get("comments"):
                     text_parts.append("// " + "\n// ".join(chunk["comments"]))
                 text_parts.append(chunk["signature"])
                 text_parts.append(chunk["code"])

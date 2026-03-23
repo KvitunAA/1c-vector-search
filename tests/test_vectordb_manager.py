@@ -164,6 +164,45 @@ class TestAddCodeChunks:
         vdb.add_code_chunks(chunks)
         assert vdb.get_stats()["code"] == 5
 
+    def test_continuation_chunk_omits_comments_in_document(self, vdb):
+        """Во 2+ чанке метода комментарии не дублируются в тексте для эмбеддинга."""
+        shared_comments = ["Параметры: Регистратор", "Документ основание"]
+        chunks = [
+            {
+                "method_name": "ДлиннаяПроцедура",
+                "method_type": "Процедура",
+                "signature": "Процедура ДлиннаяПроцедура()",
+                "is_export": False,
+                "code": "Процедура ДлиннаяПроцедура()\n    А = 1;\nКонецПроцедуры",
+                "comments": shared_comments,
+                "file_path": "/test.bsl",
+                "object_type": "Catalogs",
+                "object_name": "Тест",
+                "chunk_index": 0,
+                "total_chunks": 2,
+            },
+            {
+                "method_name": "ДлиннаяПроцедура",
+                "method_type": "Процедура",
+                "signature": "Процедура ДлиннаяПроцедура()",
+                "is_export": False,
+                "code": "Процедура ДлиннаяПроцедура()\n    Б = 2;\nКонецПроцедуры",
+                "comments": shared_comments,
+                "file_path": "/test.bsl",
+                "object_type": "Catalogs",
+                "object_name": "Тест",
+                "chunk_index": 1,
+                "total_chunks": 2,
+            },
+        ]
+        vdb.add_code_chunks(chunks)
+        coll = vdb.collections["code"]
+        first = coll.get(ids=["code_0_ДлиннаяПроцедура_0"], include=["documents"])["documents"][0]
+        second = coll.get(ids=["code_1_ДлиннаяПроцедура_1"], include=["documents"])["documents"][0]
+        assert "// Параметры: Регистратор" in first
+        assert "// Параметры: Регистратор" not in second
+        assert "Процедура ДлиннаяПроцедура()" in second
+
     def test_add_empty_list(self, vdb):
         vdb.add_code_chunks([])
         assert vdb.get_stats()["code"] == 0
