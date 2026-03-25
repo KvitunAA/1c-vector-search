@@ -126,6 +126,17 @@ class Config:
         str(PROFILE_DIR / "graphdb" / "graph.db")
     )
 
+    # Выгрузка расширения конфигурации и отдельные БД (не пересекаются с основной конфигурацией)
+    EXTENSION_CONFIG_PATH = os.getenv("EXTENSION_CONFIG_PATH", "")
+    EXTENSION_VECTORDB_PATH = os.getenv(
+        "EXTENSION_VECTORDB_PATH",
+        str(PROFILE_DIR / "extension_vectordb"),
+    )
+    EXTENSION_GRAPHDB_PATH = os.getenv(
+        "EXTENSION_GRAPHDB_PATH",
+        str(PROFILE_DIR / "extension_graphdb" / "graph.db"),
+    )
+
     EMBEDDING_MODEL = os.getenv(
         "EMBEDDING_MODEL",
         "your-embedding-model-name"
@@ -234,6 +245,9 @@ class Config:
         logger.info(f"Путь к конфигурации 1С: {cls.CONFIG_PATH}")
         logger.info(f"Путь к векторной БД: {cls.VECTORDB_PATH}")
         logger.info(f"Путь к графовой БД: {cls.GRAPHDB_PATH}")
+        logger.info(f"Расширение — выгрузка (EXTENSION_CONFIG_PATH): {cls.EXTENSION_CONFIG_PATH or '(не задано)'}")
+        logger.info(f"Расширение — векторная БД: {cls.EXTENSION_VECTORDB_PATH}")
+        logger.info(f"Расширение — граф: {cls.EXTENSION_GRAPHDB_PATH}")
         logger.info(f"Модель эмбеддингов: {cls.EMBEDDING_MODEL}")
         dim_source = "env" if os.getenv("EMBEDDING_DIMENSION", "").strip().isdigit() else "auto"
         logger.info(f"Размерность эмбеддингов: {cls.EMBEDDING_DIMENSION} ({dim_source})")

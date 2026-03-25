@@ -8,8 +8,14 @@ import pytest
 class DummyEmbeddingFn:
     """Фейковая функция эмбеддинга для тестов (возвращает нулевые вектора)."""
 
+    _dim = 10
+
     def __call__(self, input: List[str]) -> List[List[float]]:
-        return [[0.0] * 10 for _ in input]
+        return [[0.0] * self._dim for _ in input]
+
+    def embed_query(self, input: List[str]) -> List[List[float]]:
+        """Chroma вызывает при collection.query(query_texts=...)."""
+        return self.__call__(input)
 
     def name(self) -> str:
         return "DummyEmbedding"

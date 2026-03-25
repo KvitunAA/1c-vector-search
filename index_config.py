@@ -4,14 +4,14 @@
 import logging
 import sys
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 import argparse
 from tqdm import tqdm
 
 from config import Config
+from config_dump import read_configuration_dump_info
 from parser_1c import ConfigurationScanner, BSLParser
 from vectordb_manager import VectorDBManager
-from graph_db import GraphDBManager
 
 logging.basicConfig(
     level=getattr(logging, Config.LOG_LEVEL),
@@ -32,10 +32,12 @@ class ConfigIndexer:
         config_path: str,
         db_path: str = None,
         clear_existing: bool = False,
+        graph_db_path: Optional[str] = None,
     ):
         self.config_path = Path(config_path)
         self.scanner = ConfigurationScanner(self.config_path)
         self.db_manager = VectorDBManager(db_path)
+        self.graph_db_path = graph_db_path if graph_db_path is not None else Config.GRAPHDB_PATH
 
         if clear_existing:
             logger.info("Очистка существующей векторной БД...")
@@ -46,6 +48,12 @@ class ConfigIndexer:
         logger.info("=" * 80)
         logger.info("Начало индексации конфигурации 1С")
         logger.info(f"Путь к конфигурации: {self.config_path}")
+        dump_info = read_configuration_dump_info(self.config_path)
+        if dump_info.get("valid"):
+            kind = "расширение конфигурации" if dump_info.get("is_extension") else "основная конфигурация"
+            logger.info(f"Тип выгрузки: {kind}")
+            if dump_info.get("configuration_name"):
+                logger.info(f"Имя в выгрузке: {dump_info['configuration_name']}")
         if vector_only:
             logger.info("Режим: только векторная БД (граф пропускается)")
         logger.info("=" * 80)
@@ -215,11 +223,11 @@ class ConfigIndexer:
         """Индексация графа связей между объектами"""
         try:
             from index_graph import GraphIndexer
-            graph_path = Path(Config.GRAPHDB_PATH).parent
+            graph_path = Path(self.graph_db_path).parent
             graph_path.mkdir(parents=True, exist_ok=True)
             graph_indexer = GraphIndexer(
                 config_path=str(self.config_path),
-                db_path=Config.GRAPHDB_PATH,
+                db_path=self.graph_db_path,
                 clear_existing=True,
             )
             graph_indexer.index_all()
@@ -237,14 +245,28 @@ def main():
     parser.add_argument(
         '--config-path',
         type=str,
-        default=Config.CONFIG_PATH,
-        help=f'Путь к выгрузке конфигурации 1С (по умолчанию: {Config.CONFIG_PATH})'
+        default=None,
+        help='Путь к выгрузке 1С (основная конфигурация или расширение). Если не задан — из профиля.',
     )
     parser.add_argument(
         '--db-path',
         type=str,
-        default=Config.VECTORDB_PATH,
-        help=f'Путь к векторной БД (по умолчанию: {Config.VECTORDB_PATH})'
+        default=None,
+        help='Каталог векторной БД (Chroma). Если не задан — из профиля.',
+    )
+    parser.add_argument(
+        '--graph-db-path',
+        type=str,
+        default=None,
+        help='Файл SQLite графовой БД. Если не задан — GRAPHDB_PATH или EXTENSION_GRAPHDB_PATH (при --extension).',
+    )
+    parser.add_argument(
+        '--extension',
+        action='store_true',
+        help=(
+            'Индексировать выгрузку расширения в отдельные БД: EXTENSION_CONFIG_PATH, '
+            'EXTENSION_VECTORDB_PATH, EXTENSION_GRAPHDB_PATH (не затрагивает основную конфигурацию).'
+        ),
     )
     parser.add_argument(
         '--clear',
@@ -259,22 +281,51 @@ def main():
 
     args = parser.parse_args()
 
-    config_path = Path(args.config_path)
+    if args.extension:
+        effective_config = args.config_path or (Config.EXTENSION_CONFIG_PATH.strip() if Config.EXTENSION_CONFIG_PATH else "")
+        effective_vector = args.db_path or Config.EXTENSION_VECTORDB_PATH
+        effective_graph = args.graph_db_path or Config.EXTENSION_GRAPHDB_PATH
+        logger.info("Режим --extension: используются отдельные БД расширения (основная конфигурация не изменяется).")
+    else:
+        effective_config = args.config_path or Config.CONFIG_PATH
+        effective_vector = args.db_path or Config.VECTORDB_PATH
+        effective_graph = args.graph_db_path or Config.GRAPHDB_PATH
+
+    if not effective_config:
+        logger.error(
+            "Не задан путь к выгрузке. Укажите --config-path или в профиле "
+            "CONFIG_PATH (основная конфигурация) / EXTENSION_CONFIG_PATH (режим --extension)."
+        )
+        sys.exit(1)
+
+    config_path = Path(effective_config)
     if not config_path.exists():
-        logger.error(f"Путь к конфигурации не найден: {args.config_path}")
-        logger.error("Укажите правильный путь через --config-path")
+        logger.error(f"Путь к конфигурации не найден: {effective_config}")
+        logger.error("Укажите правильный путь через --config-path или переменные окружения профиля.")
         sys.exit(1)
 
     if not (config_path / "Configuration.xml").exists():
-        logger.error(f"Не найден Configuration.xml в {args.config_path}")
-        logger.error("Убедитесь, что указан путь к корню выгрузки конфигурации 1С")
+        logger.error(f"Не найден Configuration.xml в {effective_config}")
+        logger.error(
+            "Укажите корень выгрузки 1С: основная конфигурация или расширение "
+            "(оба варианта содержат Configuration.xml в корне)."
+        )
         sys.exit(1)
+
+    if args.extension:
+        ext_dump = read_configuration_dump_info(config_path)
+        if ext_dump.get("valid") and not ext_dump.get("is_extension"):
+            logger.warning(
+                "Корневой Configuration.xml не распознан как расширение. "
+                "Проверьте путь; индексация в БД расширения будет продолжена."
+            )
 
     try:
         indexer = ConfigIndexer(
-            config_path=args.config_path,
-            db_path=args.db_path,
+            config_path=effective_config,
+            db_path=effective_vector,
             clear_existing=args.clear,
+            graph_db_path=effective_graph,
         )
         indexer.index_all(vector_only=args.vector_only)
     except KeyboardInterrupt:

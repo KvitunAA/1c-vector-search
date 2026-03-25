@@ -150,6 +150,10 @@ class BSLParser:
         "Отчеты": "Reports",
     }
 
+    METADATA_COLLECTION_MAP_CF = {
+        k.casefold(): v for k, v in METADATA_COLLECTION_MAP.items()
+    }
+
     @staticmethod
     def extract_metadata_references_from_code(code: str) -> List[Tuple[str, str]]:
         """Извлечение ссылок на объекты метаданных из BSL кода."""
@@ -164,7 +168,7 @@ class BSLParser:
         for match in pattern.finditer(code):
             collection_ru = match.group(1)
             obj_name = match.group(2)
-            obj_type = BSLParser.METADATA_COLLECTION_MAP.get(collection_ru)
+            obj_type = BSLParser.METADATA_COLLECTION_MAP_CF.get(collection_ru.casefold())
             if obj_type and (obj_type, obj_name) not in seen:
                 seen.add((obj_type, obj_name))
                 refs.append((obj_type, obj_name))

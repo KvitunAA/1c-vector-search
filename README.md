@@ -2,6 +2,13 @@
 
 MCP-сервер для семантического поиска по коду и метаданным конфигураций 1С (ЗУП, УТ, ERP и т.п.). Работает локально через ChromaDB и SQLite, без Docker.
 
+### Что нового (25.03.2026)
+
+- **Расширения конфигурации:** отдельные БД без затрагивания основной выгрузки — переменные `EXTENSION_CONFIG_PATH`, `EXTENSION_VECTORDB_PATH`, `EXTENSION_GRAPHDB_PATH` в профиле; флаг **`--extension`** в `index_config.py` и `index_graph_mp.py`; скрипты `run_index_extension_vector_*.cmd`, `run_index_extension_graph_*.cmd`, `run_index_extension_full_*.cmd`; модуль **`config_dump.py`** (тип выгрузки по корневому `Configuration.xml`); в `Config.show()` выводятся пути расширения.
+- **Сводная индексация:** **`run_index_all.py`** и **`run_index_all_your_project.cmd`** — последовательно векторная БД и граф основной конфигурации, затем (если задан `EXTENSION_CONFIG_PATH`) вектор и граф расширения; опционально **`INDEX_GRAPH_WORKERS`** для шагов с графом.
+- **`init_project.py`:** при создании проекта добавляются перечисленные скрипты расширения и `run_index_all_<имя>.cmd`, в шаблон `.env` — блок `EXTENSION_*`.
+- **Тесты и парсер:** в **`extract_metadata_references_from_code`** поиск коллекции по ключу с **`casefold()`** (регистр вроде `справочники` / `Справочники`); в тестовой заглушке эмбеддингов — **`embed_query`** для вызовов Chroma при `query()`.
+
 ## Состав проекта
 
 - **Python-модули** — полная реализация MCP-сервера, индексатора и графа зависимостей:
@@ -12,11 +19,14 @@ MCP-сервер для семантического поиска по коду 
   - `parser_1c.py` — парсер BSL и XML метаданных 1С
   - `code_grep.py` — grep по исходникам для find_1c_method_usage
   - `index_config.py` — индексация кода, метаданных, форм и графа
+  - `config_dump.py` — разбор корневого `Configuration.xml` (основная конфигурация или расширение)
   - `index_graph_mp.py` — индексация только графа (с многопроцессорностью, `--workers 1` для однопроцессорного режима)
   - `index_graph.py` — **[deprecated]** однопроцессорная версия, используйте `index_graph_mp.py`
-  - `run_server.py`, `run_indexer.py` — точки входа
+  - `run_server.py`, `run_indexer.py`, `run_index_all.py` — точки входа
 - **Профили** — `projects/your_project/` — шаблон с обезличенными параметрами
 - **Скрипты** — `run_server_your_project.cmd`, `run_index_your_project.cmd` (только векторная БД), `run_index_graph_your_project.cmd` (только граф)
+- **Всё сразу** — `run_index_all_your_project.cmd` / `python run_index_all.py`: основная конфигурация (вектор + граф), затем расширение (вектор + граф), если задан `EXTENSION_CONFIG_PATH`
+- **Расширение** — `run_index_extension_vector_your_project.cmd`, `run_index_extension_graph_your_project.cmd`, `run_index_extension_full_your_project.cmd` (отдельные БД без затрагивания основной конфигурации)
 - **Схемы MCP** — `SERVER_METADATA.json`, `tools/*.json` — описание инструментов для клиентов
 
 ## Быстрый старт
@@ -100,6 +110,36 @@ run_server_your_project.cmd
 - **VECTOR_PYTHON_PATH** (в `local.env`) — `C:\path\to\python.exe`
 
 Файлы `*.env.local` и `local.env` не коммитятся в Git.
+
+### Расширения конфигурации и отдельные БД (не трогая основную конфигурацию)
+
+В одном профиле можно держать **основную** выгрузку (`CONFIG_PATH` → `VECTORDB_PATH`, `GRAPHDB_PATH`) и **отдельно** выгрузку расширения в другие каталоги/файлы:
+
+| Переменная | Назначение | Значение по умолчанию в профиле |
+|------------|------------|--------------------------------|
+| `EXTENSION_CONFIG_PATH` | Корень выгрузки расширения (где лежит `Configuration.xml`) | не задано |
+| `EXTENSION_VECTORDB_PATH` | Каталог Chroma только для расширения | `projects/<профиль>/extension_vectordb` |
+| `EXTENSION_GRAPHDB_PATH` | Файл SQLite графа только для расширения | `projects/<профиль>/extension_graphdb/graph.db` |
+
+**Одним запуском — основная конфигурация и расширение:** `run_index_all_your_project.cmd` или `python run_index_all.py` (после `set PROJECT_PROFILE=...`). Выполняется по шагам: векторная БД основной конфигурации → граф основной конфигурации → векторная БД расширения → граф расширения. Если `EXTENSION_CONFIG_PATH` не задан, выполняются только шаги 1–2. Число процессов для графа задаётся переменной `INDEX_GRAPH_WORKERS` (по умолчанию `8`).
+
+**Индексация только расширения** (основные `vectordb` / `graphdb` не изменяются):
+
+```cmd
+REM В профиле задайте EXTENSION_CONFIG_PATH в projects\<имя>\<имя>.env
+run_index_extension_vector_your_project.cmd
+run_index_extension_graph_your_project.cmd
+```
+
+Или через Python: `python run_indexer.py --extension --clear --vector-only` и `python index_graph_mp.py --extension --clear`.
+
+Флаг **`--extension`** подставляет пути из `EXTENSION_*`; при необходимости путь к выгрузке можно передать явно: `--config-path D:\ext\dump`.
+
+**Поиск в MCP по расширению:** отдельная запись в `mcpServers` с `VECTORDB_PATH` / `GRAPHDB_PATH`, указывающими на `EXTENSION_VECTORDB_PATH` и `EXTENSION_GRAPHDB_PATH` (или второй профиль только под расширение).
+
+**Альтернатива:** несколько профилей в `projects/<имя>/`, в каждом свои `CONFIG_PATH` и `VECTORDB_PATH` / `GRAPHDB_PATH` — как раньше.
+
+**Резервный вариант без `EXTENSION_*`:** в корне выгрузки должен лежать `Configuration.xml`; при указании только `CONFIG_PATH` на расширение индексируются те же каталоги, что и у основной конфигурации. В логе будет «Тип выгрузки: расширение конфигурации», если XML распознан (см. `config_dump.py`).
 
 ---
 

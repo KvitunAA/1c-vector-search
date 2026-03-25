@@ -268,18 +268,54 @@ class GraphIndexer:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Индексация графа конфигурации 1С")
-    parser.add_argument("--config-path", type=str, default=Config.CONFIG_PATH, help="Путь к выгрузке конфигурации 1С")
-    parser.add_argument("--db-path", type=str, default=None, help="Путь к файлу графовой БД (по умолчанию из конфига)")
+    parser.add_argument(
+        "--config-path",
+        type=str,
+        default=None,
+        help="Путь к выгрузке 1С. Если не задан — CONFIG_PATH или EXTENSION_CONFIG_PATH (при --extension).",
+    )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help="Файл SQLite графовой БД. Если не задан — GRAPHDB_PATH или EXTENSION_GRAPHDB_PATH (при --extension).",
+    )
+    parser.add_argument(
+        "--extension",
+        action="store_true",
+        help="Использовать выгрузку и граф расширения (EXTENSION_*), не трогая БД основной конфигурации.",
+    )
     parser.add_argument("--clear", action="store_true", help="Очистить граф перед индексацией (сбрасывает чекпоинт)")
     parser.add_argument("--no-cache", action="store_true", help="Игнорировать кеш сканирования и пересканировать файлы")
     parser.add_argument("--workers", type=int, default=None, help="Количество процессов для многопроцессорной обработки (по умолчанию: cpu_count - 1)")
     args = parser.parse_args()
-    config_path = Path(args.config_path)
+
+    if args.extension:
+        effective_config = args.config_path or (Config.EXTENSION_CONFIG_PATH.strip() if Config.EXTENSION_CONFIG_PATH else "")
+        effective_graph = args.db_path or Config.EXTENSION_GRAPHDB_PATH
+        logger.info("Режим --extension: граф пишется в отдельный файл (EXTENSION_GRAPHDB_PATH).")
+    else:
+        effective_config = args.config_path or Config.CONFIG_PATH
+        effective_graph = args.db_path or Config.GRAPHDB_PATH
+
+    if not effective_config:
+        logger.error(
+            "Не задан путь к выгрузке. Укажите --config-path или CONFIG_PATH / EXTENSION_CONFIG_PATH (для --extension)."
+        )
+        sys.exit(1)
+
+    config_path = Path(effective_config)
     if not config_path.exists():
-        logger.error(f"Путь к конфигурации не найден: {args.config_path}")
+        logger.error(f"Путь к конфигурации не найден: {effective_config}")
         sys.exit(1)
     try:
-        indexer = GraphIndexer(config_path=str(config_path), db_path=args.db_path, clear_existing=args.clear, use_cache=not args.no_cache, workers=args.workers)
+        indexer = GraphIndexer(
+            config_path=str(config_path),
+            db_path=effective_graph,
+            clear_existing=args.clear,
+            use_cache=not args.no_cache,
+            workers=args.workers,
+        )
         indexer.index_all()
     except Exception as e:
         logger.error(f"❌ Ошибка при индексации графа: {e}", exc_info=True)

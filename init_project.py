@@ -71,6 +71,12 @@ def create_project(
 # === ОБЯЗАТЕЛЬНЫЕ ПАРАМЕТРЫ ===
 CONFIG_PATH={config_path_obj.resolve()}
 
+# === РАСШИРЕНИЕ КОНФИГУРАЦИИ (отдельные БД; см. run_index_extension_*) ===
+# Корень выгрузки расширения (Configuration.xml). Пусто — задайте при индексации --config-path.
+# EXTENSION_CONFIG_PATH=
+# EXTENSION_VECTORDB_PATH по умолчанию: projects/{name}/extension_vectordb
+# EXTENSION_GRAPHDB_PATH по умолчанию: projects/{name}/extension_graphdb/graph.db
+
 # === ОПЦИОНАЛЬНЫЕ (VECTORDB_PATH по умолчанию: projects/{name}/vectordb) ===
 EMBEDDING_MODEL=your-embedding-model-name
 EMBEDDING_DIMENSION=768
@@ -142,6 +148,103 @@ if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
 '''
     run_index_graph_cmd.write_text(run_index_graph_content, encoding="utf-8")
     logger.success(f"Создан: {run_index_graph_cmd}")
+
+    run_ext_vec = project_root / f"run_index_extension_vector_{name}.cmd"
+    run_ext_vec.write_text(
+        f'''@echo off
+chcp 65001 >nul
+REM Векторная БД только для выгрузки расширения (EXTENSION_* из projects/{name}/)
+
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
+
+set PROJECT_PROFILE={name}
+
+set "PYTHON=python"
+if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
+
+"%PYTHON%" "%SCRIPT_DIR%run_indexer.py" --extension --clear --vector-only
+''',
+        encoding="utf-8",
+    )
+    logger.success(f"Создан: {run_ext_vec}")
+
+    run_ext_graph = project_root / f"run_index_extension_graph_{name}.cmd"
+    run_ext_graph.write_text(
+        f'''@echo off
+chcp 65001 >nul
+REM Граф только для выгрузки расширения (EXTENSION_GRAPHDB_PATH)
+
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
+
+set PROJECT_PROFILE={name}
+
+set "PYTHON=python"
+if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
+
+set "CLEAR_OPT="
+if defined CLEAR_GRAPH set "CLEAR_OPT=--clear"
+set "CACHE_OPT="
+if defined NO_CACHE set "CACHE_OPT=--no-cache"
+
+"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" --extension --workers 8 %CLEAR_OPT% %CACHE_OPT%
+
+pause
+''',
+        encoding="utf-8",
+    )
+    logger.success(f"Создан: {run_ext_graph}")
+
+    run_ext_full = project_root / f"run_index_extension_full_{name}.cmd"
+    run_ext_full.write_text(
+        f'''@echo off
+chcp 65001 >nul
+REM Векторная БД + граф для выгрузки расширения (EXTENSION_*)
+
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
+
+set PROJECT_PROFILE={name}
+
+set "PYTHON=python"
+if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
+
+"%PYTHON%" "%SCRIPT_DIR%run_indexer.py" --extension --clear
+
+pause
+''',
+        encoding="utf-8",
+    )
+    logger.success(f"Создан: {run_ext_full}")
+
+    run_index_all_cmd = project_root / f"run_index_all_{name}.cmd"
+    run_index_all_cmd.write_text(
+        f'''@echo off
+chcp 65001 >nul
+REM Основная конфигурация (вектор + граф) и расширение (вектор + граф), если задан EXTENSION_CONFIG_PATH
+
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
+
+set PROJECT_PROFILE={name}
+set VECTORDB_PATH=%SCRIPT_DIR%projects\\{name}\\vectordb
+set GRAPHDB_PATH=%SCRIPT_DIR%projects\\{name}\\graphdb\\graph.db
+
+set "PYTHON=python"
+if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
+
+"%PYTHON%" "%SCRIPT_DIR%run_index_all.py"
+
+pause
+''',
+        encoding="utf-8",
+    )
+    logger.success(f"Создан: {run_index_all_cmd}")
 
     mcp_setup = project_dir / "MCP_SETUP.md"
     mcp_setup_content = f"""# Подключение {name} к MCP в Cursor
