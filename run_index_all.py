@@ -43,7 +43,7 @@ def main() -> None:
     workers = os.getenv("INDEX_GRAPH_WORKERS", "8").strip() or "8"
 
     _run(
-        "[1/4] Основная конфигурация — векторная БД (Chroma)",
+        "[1/4] Основная конфигурация — векторная БД (sqlite-vec)",
         "run_indexer.py",
         ["--clear", "--vector-only"],
     )

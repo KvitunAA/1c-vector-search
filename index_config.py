@@ -252,13 +252,13 @@ def main():
         '--db-path',
         type=str,
         default=None,
-        help='Каталог векторной БД (Chroma). Если не задан — из профиля.',
+        help='Каталог векторной БД (sqlite-vec). Если не задан — из профиля.',
     )
     parser.add_argument(
         '--graph-db-path',
         type=str,
         default=None,
-        help='Файл SQLite графовой БД. Если не задан — GRAPHDB_PATH или EXTENSION_GRAPHDB_PATH (при --extension).',
+        help='Каталог графовой БД Kuzu. Если не задан — GRAPHDB_PATH или EXTENSION_GRAPHDB_PATH (при --extension).',
     )
     parser.add_argument(
         '--extension',

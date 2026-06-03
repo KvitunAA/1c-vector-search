@@ -1,4 +1,4 @@
-"""Тесты для graph_db: GraphDBManager."""
+"""Тесты для graph_db: GraphDBManager на Kuzu."""
 import json
 
 import pytest
@@ -14,23 +14,37 @@ def graph(graph_db_path):
     gm.close()
 
 
+def _node_field(graph, node_id, field):
+    """Возвращает значение свойства узла по id через Cypher."""
+    result = graph._get_conn().execute(
+        f"MATCH (n:Node {{id: $id}}) RETURN n.{field}", {"id": node_id}
+    )
+    if result.has_next():
+        return result.get_next()[0]
+    return None
+
+
+def _edge_field(graph, field):
+    """Возвращает значение свойства первого ребра через Cypher."""
+    result = graph._get_conn().execute(f"MATCH ()-[r:REL]->() RETURN r.{field}")
+    if result.has_next():
+        return result.get_next()[0]
+    return None
+
+
 class TestGraphDBManagerInit:
     """Инициализация и подключение."""
 
-    def test_creates_db_file(self, graph_db_path):
+    def test_creates_db(self, graph_db_path):
         gm = GraphDBManager(db_path=graph_db_path)
         from pathlib import Path
         assert Path(graph_db_path).exists()
         gm.close()
 
-    def test_creates_tables(self, graph):
-        conn = graph._get_conn()
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-        table_names = {r["name"] for r in tables}
-        assert "nodes" in table_names
-        assert "edges" in table_names
+    def test_empty_after_init(self, graph):
+        stats = graph.get_stats()
+        assert stats["nodes_count"] == 0
+        assert stats["edges_count"] == 0
 
     def test_close_and_reconnect(self, graph_db_path):
         gm = GraphDBManager(db_path=graph_db_path)
@@ -57,18 +71,15 @@ class TestAddNode:
             object_type="Catalogs", object_name="Номенклатура",
             synonym="Товары", extra={"custom": "data"},
         )
-        conn = graph._get_conn()
-        row = conn.execute("SELECT * FROM nodes WHERE id='n1'").fetchone()
-        assert row["synonym"] == "Товары"
-        extra = json.loads(row["extra"])
+        assert _node_field(graph, "n1", "synonym") == "Товары"
+        extra = json.loads(_node_field(graph, "n1", "extra"))
         assert extra["custom"] == "data"
 
     def test_upsert_replaces_existing(self, graph):
         graph.add_node("n1", "Metadata", "Old")
         graph.add_node("n1", "Metadata", "New")
-        conn = graph._get_conn()
-        row = conn.execute("SELECT name FROM nodes WHERE id='n1'").fetchone()
-        assert row["name"] == "New"
+        assert _node_field(graph, "n1", "name") == "New"
+        assert graph.get_stats()["nodes_count"] == 1
 
     def test_invalid_node_type_raises(self, graph):
         with pytest.raises(ValueError, match="Неизвестный тип узла"):
@@ -114,9 +125,7 @@ class TestAddEdge:
         graph.add_node("s1", "Metadata", "Source")
         graph.add_node("t1", "Metadata", "Target")
         graph.add_edge("s1", "t1", "REFERENCES", extra={"context": "test"})
-        conn = graph._get_conn()
-        row = conn.execute("SELECT extra FROM edges").fetchone()
-        extra = json.loads(row["extra"])
+        extra = json.loads(_edge_field(graph, "extra"))
         assert extra["context"] == "test"
 
 
@@ -134,11 +143,7 @@ class TestEnsureMetadataNode:
 
     def test_node_has_correct_type(self, graph):
         graph.ensure_metadata_node("Documents", "Заказ")
-        conn = graph._get_conn()
-        row = conn.execute(
-            "SELECT node_type FROM nodes WHERE id='metadata:Documents:Заказ'"
-        ).fetchone()
-        assert row["node_type"] == "Metadata"
+        assert _node_field(graph, "metadata:Documents:Заказ", "node_type") == "Metadata"
 
 
 class TestClear:
@@ -201,23 +206,6 @@ class TestGetReferences:
         graph.ensure_metadata_node("Catalogs", "БезСсылок")
         refs = graph.get_references("БезСсылок")
         assert refs == []
-
-
-class TestEscapeLike:
-    """Экранирование спецсимволов в LIKE."""
-
-    def test_escapes_percent(self, graph):
-        assert "\\%" in graph._escape_like("100%")
-
-    def test_escapes_underscore(self, graph):
-        assert "\\_" in graph._escape_like("Имя_Поле")
-
-    def test_plain_text_unchanged(self, graph):
-        assert graph._escape_like("Номенклатура") == "Номенклатура"
-
-    def test_double_backslash(self, graph):
-        result = graph._escape_like("a\\b")
-        assert "\\\\" in result
 
 
 class TestGetStats:

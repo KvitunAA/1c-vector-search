@@ -121,6 +121,7 @@ class Config:
         "VECTORDB_PATH",
         str(PROFILE_DIR / "vectordb")
     )
+    # Каталог графовой БД Kuzu (Kuzu создаёт БД как директорию; путь трактуется как каталог).
     GRAPHDB_PATH = os.getenv(
         "GRAPHDB_PATH",
         str(PROFILE_DIR / "graphdb" / "graph.db")
@@ -243,8 +244,8 @@ class Config:
         logger.info("=" * 60)
         logger.info(f"Директория профиля: {cls.PROFILE_DIR}")
         logger.info(f"Путь к конфигурации 1С: {cls.CONFIG_PATH}")
-        logger.info(f"Путь к векторной БД: {cls.VECTORDB_PATH}")
-        logger.info(f"Путь к графовой БД: {cls.GRAPHDB_PATH}")
+        logger.info(f"Путь к векторной БД (sqlite-vec): {cls.VECTORDB_PATH}")
+        logger.info(f"Путь к графовой БД (Kuzu): {cls.GRAPHDB_PATH}")
         logger.info(f"Расширение — выгрузка (EXTENSION_CONFIG_PATH): {cls.EXTENSION_CONFIG_PATH or '(не задано)'}")
         logger.info(f"Расширение — векторная БД: {cls.EXTENSION_VECTORDB_PATH}")
         logger.info(f"Расширение — граф: {cls.EXTENSION_GRAPHDB_PATH}")

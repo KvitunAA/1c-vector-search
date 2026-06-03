@@ -1,21 +1,24 @@
-"""Тесты для vectordb_manager: VectorDBManager, _tokenize, _hybrid_rerank, _apply_mmr."""
-from unittest.mock import MagicMock, patch
+"""Тесты для vectordb_manager: VectorDBManager (sqlite-vec), _tokenize, _hybrid_rerank, _apply_mmr."""
+from unittest.mock import MagicMock
 from typing import List
 
 import pytest
 
 
 class DummyEmbeddingFn:
-    """Фейковая функция эмбеддинга для тестов (возвращает нулевые вектора)."""
+    """Детерминированная функция эмбеддинга для тестов (ненулевые вектора)."""
 
-    _dim = 10
+    _dim = 16
 
     def __call__(self, input: List[str]) -> List[List[float]]:
-        return [[0.0] * self._dim for _ in input]
-
-    def embed_query(self, input: List[str]) -> List[List[float]]:
-        """Chroma вызывает при collection.query(query_texts=...)."""
-        return self.__call__(input)
+        vectors = []
+        for text in input:
+            vec = [0.0] * self._dim
+            for i, ch in enumerate(text):
+                vec[i % self._dim] += (ord(ch) % 17) / 17.0
+            vec[0] += 1.0  # гарантируем ненулевой вектор
+            vectors.append(vec)
+        return vectors
 
     def name(self) -> str:
         return "DummyEmbedding"
@@ -23,7 +26,7 @@ class DummyEmbeddingFn:
 
 @pytest.fixture
 def vdb(tmp_path, monkeypatch):
-    """Создаёт VectorDBManager с in-memory-подобным хранением."""
+    """Создаёт VectorDBManager на sqlite-vec с фейковой функцией эмбеддинга."""
     monkeypatch.setenv("CONFIG_PATH", "")
     monkeypatch.setenv("PROJECT_PROFILE", "default")
     monkeypatch.setenv("EMBEDDING_API_BASE", "")
@@ -34,15 +37,15 @@ def vdb(tmp_path, monkeypatch):
     import importlib
     import config
     importlib.reload(config)
+    import vectordb_manager
+    importlib.reload(vectordb_manager)
 
-    with patch(
-        "vectordb_manager.embedding_functions.SentenceTransformerEmbeddingFunction",
-        return_value=DummyEmbeddingFn(),
-    ):
-        from vectordb_manager import VectorDBManager
-        manager = VectorDBManager(db_path=str(tmp_path / "test_vdb"))
-
-    return manager
+    manager = vectordb_manager.VectorDBManager(
+        db_path=str(tmp_path / "test_vdb"),
+        embedding_function=DummyEmbeddingFn(),
+    )
+    yield manager
+    manager.close()
 
 
 class TestTokenize:
@@ -202,9 +205,14 @@ class TestAddCodeChunks:
             },
         ]
         vdb.add_code_chunks(chunks)
-        coll = vdb.collections["code"]
-        first = coll.get(ids=["code_0_ДлиннаяПроцедура_0"], include=["documents"])["documents"][0]
-        second = coll.get(ids=["code_1_ДлиннаяПроцедура_1"], include=["documents"])["documents"][0]
+        first = vdb._conn.execute(
+            'SELECT document FROM "1c_code_items" WHERE item_id = ?',
+            ("code_0_ДлиннаяПроцедура_0",),
+        ).fetchone()[0]
+        second = vdb._conn.execute(
+            'SELECT document FROM "1c_code_items" WHERE item_id = ?',
+            ("code_1_ДлиннаяПроцедура_1",),
+        ).fetchone()[0]
         assert "// Параметры: Регистратор" in first
         assert "// Параметры: Регистратор" not in second
         assert "Процедура ДлиннаяПроцедура()" in second
@@ -272,6 +280,56 @@ class TestSearchCode:
         assert "relevance" in results[0]
         assert "document" in results[0]
         assert "metadata" in results[0]
+
+    def test_search_only_export_filter(self, vdb):
+        chunks = [
+            {
+                "method_name": "ЭкспортныйМетод",
+                "method_type": "Функция",
+                "signature": "Функция ЭкспортныйМетод() Экспорт",
+                "is_export": True,
+                "code": "Функция ЭкспортныйМетод() Экспорт\nКонецФункции",
+                "comments": [],
+                "file_path": "/a.bsl",
+                "object_type": "CommonModules",
+                "object_name": "Модуль",
+            },
+            {
+                "method_name": "ЛокальныйМетод",
+                "method_type": "Функция",
+                "signature": "Функция ЛокальныйМетод()",
+                "is_export": False,
+                "code": "Функция ЛокальныйМетод()\nКонецФункции",
+                "comments": [],
+                "file_path": "/a.bsl",
+                "object_type": "CommonModules",
+                "object_name": "Модуль",
+            },
+        ]
+        vdb.add_code_chunks(chunks)
+        results = vdb.search_code("метод", limit=10, filters={"is_export": True})
+        assert all(r["metadata"].get("is_export") for r in results)
+
+
+class TestSearchCodeByObject:
+    """Получение кода по имени объекта."""
+
+    def test_returns_object_methods(self, vdb):
+        chunks = [{
+            "method_name": "Метод1",
+            "method_type": "Функция",
+            "signature": "Функция Метод1()",
+            "is_export": False,
+            "code": "Функция Метод1()\nКонецФункции",
+            "comments": [],
+            "file_path": "/a.bsl",
+            "object_type": "Catalogs",
+            "object_name": "Номенклатура",
+        }]
+        vdb.add_code_chunks(chunks)
+        results = vdb.search_code_by_object("Номенклатура")
+        assert len(results) == 1
+        assert results[0]["metadata"]["object_name"] == "Номенклатура"
 
 
 class TestSearchMetadata:

@@ -278,7 +278,7 @@ def main():
         "--db-path",
         type=str,
         default=None,
-        help="Файл SQLite графовой БД. Если не задан — GRAPHDB_PATH или EXTENSION_GRAPHDB_PATH (при --extension).",
+        help="Каталог графовой БД Kuzu. Если не задан — GRAPHDB_PATH или EXTENSION_GRAPHDB_PATH (при --extension).",
     )
     parser.add_argument(
         "--extension",

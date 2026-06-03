@@ -302,7 +302,7 @@ def main():
         "--db-path",
         type=str,
         default=None,
-        help="Путь к файлу графовой БД (по умолчанию из конфига)",
+        help="Каталог графовой БД Kuzu (по умолчанию из конфига)",
     )
     parser.add_argument("--clear", action="store_true", help="Очистить граф перед индексацией (сбрасывает чекпоинт)")
     parser.add_argument("--no-cache", action="store_true", help="Игнорировать кеш сканирования и пересканировать файлы")

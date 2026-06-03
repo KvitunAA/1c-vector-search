@@ -1,13 +1,17 @@
 """
-Менеджер векторной базы данных для хранения информации о конфигурации 1С
+Менеджер векторной базы данных для хранения информации о конфигурации 1С.
+Хранилище — sqlite-vec (расширение SQLite для KNN-поиска по эмбеддингам).
+Эмбеддинги вычисляются самостоятельно: через OpenAI-совместимый API (LM Studio,
+LocalAI и т.п.) либо локально через sentence-transformers.
 """
 import re
+import json
 import logging
-from typing import List, Dict, Optional, Tuple
+import sqlite3
+from typing import List, Dict, Optional, Tuple, Callable
 from pathlib import Path
-import chromadb
-from chromadb.config import Settings
-from chromadb.utils import embedding_functions
+
+import sqlite_vec
 
 from config import Config
 
@@ -47,42 +51,97 @@ class QwenEOSEmbeddingWrapper:
         return "QwenEOSWrapper"
 
 
-class VectorDBManager:
-    """Управление векторной БД"""
+class APIEmbeddingFunction:
+    """Эмбеддинги через OpenAI-совместимый API (POST {base}/embeddings)."""
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, api_base: str, api_key: str, model_name: str):
+        import requests
+        self._requests = requests
+        self._url = api_base.rstrip("/") + "/embeddings"
+        self._headers = {"Content-Type": "application/json"}
+        if api_key:
+            self._headers["Authorization"] = f"Bearer {api_key}"
+        self._model = model_name
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        if not input:
+            return []
+        payload = {"model": self._model, "input": list(input)}
+        response = self._requests.post(self._url, json=payload, headers=self._headers, timeout=300)
+        response.raise_for_status()
+        data = response.json().get("data", [])
+        ordered = sorted(data, key=lambda d: d.get("index", 0))
+        return [item["embedding"] for item in ordered]
+
+    def name(self) -> str:
+        return f"API:{self._model}"
+
+
+class LocalEmbeddingFunction:
+    """Локальные эмбеддинги через sentence-transformers."""
+
+    def __init__(self, model_name: str):
+        from sentence_transformers import SentenceTransformer
+        self._model = SentenceTransformer(model_name, trust_remote_code=True)
+        self._model_name = model_name
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        if not input:
+            return []
+        vectors = self._model.encode(list(input), convert_to_numpy=True)
+        return [v.tolist() for v in vectors]
+
+    def name(self) -> str:
+        return f"Local:{self._model_name}"
+
+
+def build_embedding_function() -> Callable[[List[str]], List[List[float]]]:
+    """Создаёт функцию эмбеддинга по настройкам Config (API или локальная модель)."""
+    if Config.EMBEDDING_API_BASE:
+        base_ef = APIEmbeddingFunction(
+            api_base=Config.EMBEDDING_API_BASE,
+            api_key=Config.EMBEDDING_API_KEY,
+            model_name=Config.EMBEDDING_MODEL,
+        )
+        if "qwen3" in Config.EMBEDDING_MODEL.lower() and Config.EMBEDDING_ADD_EOS_MANUAL:
+            logger.warning(
+                f"EMBEDDING_ADD_EOS_MANUAL=true для модели {Config.EMBEDDING_MODEL}. "
+                f"llama.cpp (LM Studio) уже добавляет EOS автоматически — возможен двойной EOS. "
+                f"Рекомендуется установить EMBEDDING_ADD_EOS_MANUAL=false."
+            )
+            return QwenEOSEmbeddingWrapper(base_ef)
+        logger.info(f"Эмбеддинги через API: {Config.EMBEDDING_API_BASE}, модель: {Config.EMBEDDING_MODEL}")
+        return base_ef
+
+    logger.info(f"Эмбеддинги локально: {Config.EMBEDDING_MODEL}")
+    return LocalEmbeddingFunction(Config.EMBEDDING_MODEL)
+
+
+class VectorDBManager:
+    """Управление векторной БД на sqlite-vec."""
+
+    # Поля метаданных, которые дублируются в отдельные колонки для фильтрации/выборки
+    _FILTER_COLUMNS = ("object_name", "object_type", "is_export")
+
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        embedding_function: Optional[Callable[[List[str]], List[List[float]]]] = None,
+    ):
         self.db_path = db_path or Config.VECTORDB_PATH
         Path(self.db_path).mkdir(parents=True, exist_ok=True)
+        self.sqlite_file = str(Path(self.db_path) / "vectordb.sqlite")
 
-        self.client = chromadb.PersistentClient(
-            path=self.db_path,
-            settings=Settings(anonymized_telemetry=False)
-        )
+        self.embedding_function = embedding_function or build_embedding_function()
 
-        if Config.EMBEDDING_API_BASE:
-            base_ef = embedding_functions.OpenAIEmbeddingFunction(
-                api_base=Config.EMBEDDING_API_BASE,
-                api_key=Config.EMBEDDING_API_KEY,
-                model_name=Config.EMBEDDING_MODEL
-            )
-            if "qwen3" in Config.EMBEDDING_MODEL.lower() and Config.EMBEDDING_ADD_EOS_MANUAL:
-                self.embedding_function = QwenEOSEmbeddingWrapper(base_ef)
-                logger.warning(
-                    f"EMBEDDING_ADD_EOS_MANUAL=true для модели {Config.EMBEDDING_MODEL}. "
-                    f"llama.cpp (LM Studio) уже добавляет EOS автоматически — возможен двойной EOS. "
-                    f"Рекомендуется установить EMBEDDING_ADD_EOS_MANUAL=false."
-                )
-            else:
-                self.embedding_function = base_ef
-                logger.info(f"Эмбеддинги через API: {Config.EMBEDDING_API_BASE}, модель: {Config.EMBEDDING_MODEL}")
-        else:
-            self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name=Config.EMBEDDING_MODEL,
-                trust_remote_code=True
-            )
-            logger.info(f"Эмбеддинги локально: {Config.EMBEDDING_MODEL}")
+        self._conn = sqlite3.connect(self.sqlite_file)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.enable_load_extension(True)
+        sqlite_vec.load(self._conn)
+        self._conn.enable_load_extension(False)
 
-        self.collections = {}
+        self._distance_metric = self._resolve_distance_metric()
+        self._vec_dim: Dict[str, int] = {}
         self._init_collections()
 
         alpha = getattr(Config, "HYBRID_SEARCH_ALPHA", 1.0)
@@ -99,43 +158,131 @@ class VectorDBManager:
             search_mode.append("вектор")
         if use_mmr:
             search_mode.append(f"MMR (lambda={getattr(Config, 'MMR_LAMBDA', 0.5)})")
-        logger.info(f"Векторная БД инициализирована: {self.db_path}, поиск: {' + '.join(search_mode)}")
+        logger.info(
+            f"Векторная БД (sqlite-vec) инициализирована: {self.sqlite_file}, "
+            f"метрика: {self._distance_metric}, поиск: {' + '.join(search_mode)}"
+        )
+
+    @staticmethod
+    def _resolve_distance_metric() -> str:
+        metric = getattr(Config, "VECTOR_DISTANCE_METRIC", "cosine").lower()
+        if metric == "l2":
+            return "L2"
+        if metric == "l1":
+            return "L1"
+        return "cosine"
+
+    def _items_table(self, collection_key: str) -> str:
+        return f"{Config.COLLECTIONS[collection_key]}_items"
+
+    def _vec_table(self, collection_key: str) -> str:
+        return f"vec_{Config.COLLECTIONS[collection_key]}"
 
     def _init_collections(self):
-        distance = getattr(Config, "VECTOR_DISTANCE_METRIC", "cosine")
-        if distance not in ("cosine", "l2", "ip"):
-            distance = "cosine"
-        collection_metadata = {"hnsw:space": distance}
-        for key, name in Config.COLLECTIONS.items():
-            try:
-                self.collections[key] = self.client.get_or_create_collection(
-                    name=name,
-                    embedding_function=self.embedding_function,
-                    metadata={**collection_metadata, "description": f"Коллекция для {key} из конфигурации 1С"}
+        """Создаёт таблицы метаданных (vec0-таблицы создаются лениво — см. _ensure_vec_table)."""
+        for key in Config.COLLECTIONS:
+            items = self._items_table(key)
+            self._conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS "{items}" (
+                    rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id TEXT UNIQUE,
+                    document TEXT,
+                    metadata TEXT,
+                    object_name TEXT,
+                    object_type TEXT,
+                    is_export INTEGER
                 )
-                logger.info(f"Коллекция '{name}' готова (метрика: {distance})")
-            except Exception as e:
-                logger.error(f"Ошибка создания коллекции {name}: {e}")
-                raise
+                """
+            )
+            self._conn.execute(
+                f'CREATE INDEX IF NOT EXISTS "idx_{items}_object" ON "{items}"(object_name)'
+            )
+        self._conn.commit()
+
+    def _ensure_vec_table(self, collection_key: str, dim: int):
+        vec = self._vec_table(collection_key)
+        if collection_key in self._vec_dim:
+            return
+        existing = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (vec,)
+        ).fetchone()
+        if not existing:
+            self._conn.execute(
+                f'CREATE VIRTUAL TABLE "{vec}" USING vec0(embedding float[{dim}] distance_metric={self._distance_metric})'
+            )
+            self._conn.commit()
+        self._vec_dim[collection_key] = dim
+
+    def _vec_table_exists(self, collection_key: str) -> bool:
+        vec = self._vec_table(collection_key)
+        row = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (vec,)
+        ).fetchone()
+        return row is not None
 
     def clear_all_collections(self):
-        for name in Config.COLLECTIONS.values():
-            try:
-                self.client.delete_collection(name=name)
-                logger.info(f"Коллекция '{name}' удалена")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить коллекцию {name}: {e}")
+        for key in Config.COLLECTIONS:
+            self._conn.execute(f'DROP TABLE IF EXISTS "{self._vec_table(key)}"')
+            self._conn.execute(f'DROP TABLE IF EXISTS "{self._items_table(key)}"')
+        self._conn.commit()
+        self._vec_dim.clear()
         self._init_collections()
+        logger.info("Все коллекции очищены")
+
+    def _truncate(self, document: str) -> str:
+        if Config.EMBEDDING_MAX_CHARS > 0 and len(document) > Config.EMBEDDING_MAX_CHARS:
+            return document[: Config.EMBEDDING_MAX_CHARS - 3] + "..."
+        return document
+
+    def _insert_batch(
+        self,
+        collection_key: str,
+        records: List[Dict],
+    ):
+        """Вставляет батч записей: документ, метаданные и эмбеддинг.
+
+        records: список dict с ключами item_id, document, metadata (dict).
+        """
+        if not records:
+            return
+        documents = [r["document"] for r in records]
+        embeddings = self.embedding_function(documents)
+        if not embeddings:
+            return
+        self._ensure_vec_table(collection_key, len(embeddings[0]))
+        items = self._items_table(collection_key)
+        vec = self._vec_table(collection_key)
+        try:
+            for record, embedding in zip(records, embeddings):
+                metadata = record["metadata"]
+                cur = self._conn.execute(
+                    f'INSERT INTO "{items}" (item_id, document, metadata, object_name, object_type, is_export) '
+                    f"VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        record["item_id"],
+                        record["document"],
+                        json.dumps(metadata, ensure_ascii=False),
+                        metadata.get("object_name", ""),
+                        metadata.get("object_type", ""),
+                        1 if metadata.get("is_export") else 0,
+                    ),
+                )
+                self._conn.execute(
+                    f'INSERT INTO "{vec}" (rowid, embedding) VALUES (?, ?)',
+                    (cur.lastrowid, sqlite_vec.serialize_float32(embedding)),
+                )
+            self._conn.commit()
+        except Exception as e:
+            self._conn.rollback()
+            logger.error(f"Ошибка добавления записей в коллекцию '{collection_key}': {e}")
 
     def add_code_chunks(self, chunks: List[Dict], batch_size: int = None):
         if batch_size is None:
             batch_size = getattr(Config, "BATCH_SIZE_CODE", 100)
-        collection = self.collections["code"]
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
-            documents = []
-            metadatas = []
-            ids = []
+            records = []
             for j, chunk in enumerate(batch):
                 text_parts = []
                 chunk_index = chunk.get("chunk_index", 0)
@@ -148,10 +295,7 @@ class VectorDBManager:
                     text_parts.append("// " + "\n// ".join(chunk["comments"]))
                 text_parts.append(chunk["signature"])
                 text_parts.append(chunk["code"])
-                document = "\n".join(text_parts)
-                if Config.EMBEDDING_MAX_CHARS > 0 and len(document) > Config.EMBEDDING_MAX_CHARS:
-                    document = document[: Config.EMBEDDING_MAX_CHARS - 3] + "..."
-                documents.append(document)
+                document = self._truncate("\n".join(text_parts))
                 metadata = {
                     "object_type": chunk.get("object_type", ""),
                     "object_name": chunk.get("object_name", ""),
@@ -165,15 +309,11 @@ class VectorDBManager:
                     "chunk_index": chunk.get("chunk_index", 0),
                     "total_chunks": chunk.get("total_chunks", 1),
                 }
-                metadatas.append(metadata)
                 chunk_idx = chunk.get("chunk_index", 0)
-                chunk_id = f"code_{i + j}_{chunk.get('method_name', 'unknown')}_{chunk_idx}"
-                ids.append(chunk_id)
-            try:
-                collection.add(documents=documents, metadatas=metadatas, ids=ids)
-                logger.info(f"Добавлено {len(batch)} чанков кода (батч {i // batch_size + 1})")
-            except Exception as e:
-                logger.error(f"Ошибка добавления кода в БД: {e}")
+                item_id = f"code_{i + j}_{chunk.get('method_name', 'unknown')}_{chunk_idx}"
+                records.append({"item_id": item_id, "document": document, "metadata": metadata})
+            self._insert_batch("code", records)
+            logger.info(f"Добавлено {len(batch)} чанков кода (батч {i // batch_size + 1})")
 
     @staticmethod
     def _build_metadata_document(obj: Dict) -> str:
@@ -211,17 +351,11 @@ class VectorDBManager:
     def add_metadata_objects(self, metadata_objects: List[Dict], batch_size: int = None):
         if batch_size is None:
             batch_size = getattr(Config, "BATCH_SIZE_METADATA", 50)
-        collection = self.collections["metadata"]
         for i in range(0, len(metadata_objects), batch_size):
             batch = metadata_objects[i:i + batch_size]
-            documents = []
-            metadatas = []
-            ids = []
+            records = []
             for j, obj in enumerate(batch):
-                document = self._build_metadata_document(obj)
-                if Config.EMBEDDING_MAX_CHARS > 0 and len(document) > Config.EMBEDDING_MAX_CHARS:
-                    document = document[: Config.EMBEDDING_MAX_CHARS - 3] + "..."
-                documents.append(document)
+                document = self._truncate(self._build_metadata_document(obj))
                 obj_type = obj.get('object_type_dir') or obj.get('type', '')
                 ts_names = []
                 for ts in obj.get('tabular_sections', []):
@@ -239,24 +373,17 @@ class VectorDBManager:
                     "commands_count": len(obj.get('commands', [])),
                     "file_path": obj.get('file_path', '')
                 }
-                metadatas.append(metadata)
-                obj_id = f"metadata_{obj_type}_{obj.get('name', 'unknown')}_{i + j}"
-                ids.append(obj_id)
-            try:
-                collection.add(documents=documents, metadatas=metadatas, ids=ids)
-                logger.info(f"Добавлено {len(batch)} объектов метаданных (батч {i // batch_size + 1})")
-            except Exception as e:
-                logger.error(f"Ошибка добавления метаданных в БД: {e}")
+                item_id = f"metadata_{obj_type}_{obj.get('name', 'unknown')}_{i + j}"
+                records.append({"item_id": item_id, "document": document, "metadata": metadata})
+            self._insert_batch("metadata", records)
+            logger.info(f"Добавлено {len(batch)} объектов метаданных (батч {i // batch_size + 1})")
 
     def add_forms(self, forms: List[Dict], batch_size: int = None):
         if batch_size is None:
             batch_size = getattr(Config, "BATCH_SIZE_FORMS", 50)
-        collection = self.collections["forms"]
         for i in range(0, len(forms), batch_size):
             batch = forms[i:i + batch_size]
-            documents = []
-            metadatas = []
-            ids = []
+            records = []
             for j, form in enumerate(batch):
                 text_parts = [
                     f"Форма: {form.get('form_name', '')}",
@@ -264,10 +391,7 @@ class VectorDBManager:
                 ]
                 if form.get('elements'):
                     text_parts.append(f"Элементы: {', '.join(form['elements'][:20])}")
-                document = "\n".join(text_parts)
-                if Config.EMBEDDING_MAX_CHARS > 0 and len(document) > Config.EMBEDDING_MAX_CHARS:
-                    document = document[: Config.EMBEDDING_MAX_CHARS - 3] + "..."
-                documents.append(document)
+                document = self._truncate("\n".join(text_parts))
                 metadata = {
                     "form_name": form.get('form_name', ''),
                     "object_name": form.get('object_name', ''),
@@ -275,14 +399,10 @@ class VectorDBManager:
                     "elements_count": form.get('elements_count', 0),
                     "file_path": form.get('file_path', '')
                 }
-                metadatas.append(metadata)
-                form_id = f"form_{form.get('object_name', 'unknown')}_{form.get('form_name', 'unknown')}_{i + j}"
-                ids.append(form_id)
-            try:
-                collection.add(documents=documents, metadatas=metadatas, ids=ids)
-                logger.info(f"Добавлено {len(batch)} форм (батч {i // batch_size + 1})")
-            except Exception as e:
-                logger.error(f"Ошибка добавления форм в БД: {e}")
+                item_id = f"form_{form.get('object_name', 'unknown')}_{form.get('form_name', 'unknown')}_{i + j}"
+                records.append({"item_id": item_id, "document": document, "metadata": metadata})
+            self._insert_batch("forms", records)
+            logger.info(f"Добавлено {len(batch)} форм (батч {i // batch_size + 1})")
 
     def _tokenize(self, text: str) -> List[str]:
         """Простая токенизация для BM25 (русский + BSL)."""
@@ -348,6 +468,36 @@ class VectorDBManager:
             selected.append(remaining.pop(best_idx))
         return selected
 
+    def _knn_items(
+        self,
+        collection_key: str,
+        query: str,
+        fetch_k: int,
+    ) -> List[Tuple[str, Dict, float]]:
+        """Векторный KNN-поиск: возвращает список (document, metadata, distance)."""
+        if not self._vec_table_exists(collection_key):
+            return []
+        embeddings = self.embedding_function([query])
+        if not embeddings:
+            return []
+        query_vector = sqlite_vec.serialize_float32(embeddings[0])
+        items_table = self._items_table(collection_key)
+        vec_table = self._vec_table(collection_key)
+        rows = self._conn.execute(
+            f'''
+            SELECT i.document AS document, i.metadata AS metadata, v.distance AS distance
+            FROM "{vec_table}" v
+            JOIN "{items_table}" i ON i.rowid = v.rowid
+            WHERE v.embedding MATCH ? AND k = ?
+            ORDER BY v.distance
+            ''',
+            (query_vector, fetch_k),
+        ).fetchall()
+        return [
+            (row["document"], json.loads(row["metadata"]), float(row["distance"]))
+            for row in rows
+        ]
+
     def _query_collection(
         self,
         collection_key: str,
@@ -357,22 +507,17 @@ class VectorDBManager:
         error_label: str = "поиск",
     ) -> List[Dict]:
         """Универсальный семантический поиск с гибридным re-ranking и MMR."""
-        collection = self.collections[collection_key]
-        fetch_k = max(limit, min(getattr(Config, "SEARCH_FETCH_K", 50), 100))
         alpha = getattr(Config, "HYBRID_SEARCH_ALPHA", 1.0)
         use_mmr = getattr(Config, "SEARCH_USE_MMR", False)
         mmr_lambda = getattr(Config, "MMR_LAMBDA", 0.5)
+        fetch_k = max(limit, min(getattr(Config, "SEARCH_FETCH_K", 50), 100))
+        if where:
+            # over-fetch для пост-фильтрации в Python (нативные фильтры vec0 не используем)
+            fetch_k = max(fetch_k, 200)
         try:
-            results = collection.query(
-                query_texts=[query],
-                n_results=fetch_k,
-                where=where,
-            )
-            items = list(zip(
-                results["documents"][0] or [],
-                results["metadatas"][0] or [],
-                results["distances"][0] or [],
-            ))
+            items = self._knn_items(collection_key, query, fetch_k)
+            if where:
+                items = [it for it in items if self._matches_filter(it[1], where)]
             if alpha < 1.0 and HAS_BM25:
                 items = self._hybrid_rerank(query, items, alpha)
             if use_mmr:
@@ -383,6 +528,17 @@ class VectorDBManager:
         except Exception as e:
             logger.error(f"Ошибка {error_label}: {e}")
             return []
+
+    @staticmethod
+    def _matches_filter(metadata: Dict, where: Dict) -> bool:
+        """Пост-фильтрация по равенству значений метаданных."""
+        for field, expected in where.items():
+            if isinstance(expected, dict):
+                # формат {"$eq": value}
+                expected = expected.get("$eq", expected)
+            if metadata.get(field) != expected:
+                return False
+        return True
 
     def search_code(self, query: str, limit: int = 5, filters: Optional[Dict] = None) -> List[Dict]:
         return self._query_collection(
@@ -397,31 +553,20 @@ class VectorDBManager:
         query: Optional[str] = None,
         limit: int = 200
     ) -> List[Dict]:
-        collection = self.collections["code"]
-        where_filter = {"object_name": {"$eq": object_name}}
+        items_table = self._items_table("code")
         try:
             if not query or not query.strip():
-                get_result = collection.get(
-                    where=where_filter,
-                    limit=limit,
-                    include=["documents", "metadatas"]
-                )
-                if not get_result or not get_result.get("documents"):
-                    return []
-                items = [
-                    (doc, meta, 0.0)
-                    for doc, meta in zip(
-                        get_result["documents"],
-                        get_result["metadatas"]
-                    )
-                ]
+                rows = self._conn.execute(
+                    f'SELECT document, metadata FROM "{items_table}" WHERE object_name = ? LIMIT ?',
+                    (object_name, limit),
+                ).fetchall()
+                items = [(row["document"], json.loads(row["metadata"]), 0.0) for row in rows]
                 return self._format_results_from_items(items)
-            results = collection.query(
-                query_texts=[query],
-                n_results=limit,
-                where=where_filter
-            )
-            return self._format_results(results)
+            fetch_k = max(limit, 200)
+            items = self._knn_items("code", query, fetch_k)
+            items = [it for it in items if it[1].get("object_name") == object_name]
+            items = items[:limit]
+            return self._format_results_from_items(items)
         except Exception as e:
             logger.error(f"Ошибка поиска кода по объекту '{object_name}': {e}")
             return []
@@ -440,23 +585,6 @@ class VectorDBManager:
             error_label="поиска форм",
         )
 
-    def _format_results(self, results) -> List[Dict]:
-        formatted = []
-        if not results.get("documents") or not results["documents"][0]:
-            return formatted
-        for i, (doc, metadata, distance) in enumerate(zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0]
-        )):
-            formatted.append({
-                "rank": i + 1,
-                "relevance": round(1 - distance, 3),
-                "document": doc,
-                "metadata": metadata
-            })
-        return formatted
-
     def _format_results_from_items(
         self,
         items: List[Tuple[str, Dict, float]]
@@ -474,9 +602,17 @@ class VectorDBManager:
 
     def get_stats(self) -> Dict:
         stats = {}
-        for key, collection in self.collections.items():
+        for key in Config.COLLECTIONS:
             try:
-                stats[key] = collection.count()
+                row = self._conn.execute(
+                    f'SELECT COUNT(*) FROM "{self._items_table(key)}"'
+                ).fetchone()
+                stats[key] = row[0] if row else 0
             except Exception:
                 stats[key] = 0
         return stats
+
+    def close(self):
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
