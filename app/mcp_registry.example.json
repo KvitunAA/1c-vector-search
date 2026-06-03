@@ -1,0 +1,29 @@
+{
+  "_comment": "Скопируйте в app/mcp_registry.json и опишите ваши vector MCP-серверы. Записи переопределяют автообнаруженные профили текущего репозитория. cwd — корень соответствующего репозитория MCP_Distr, command/args — как запускать сервер (обычно python run_server.py), env — переменные профиля (как в mcp.json Cursor).",
+  "servers": [
+    {
+      "name": "KA_Vector",
+      "description": "Комплексная автоматизация",
+      "cwd": "C:\\Cursor\\MCP_Distr\\1c-vector-search-KA_Vector",
+      "command": "C:\\path\\to\\python.exe",
+      "args": ["run_server.py"],
+      "env": {
+        "PROJECT_PROFILE": "KA_Vector",
+        "VECTORDB_PATH": "C:\\Cursor\\VectorBD\\KA_2_5\\projects\\KA_Vector\\vectordb",
+        "GRAPHDB_PATH": "C:\\Cursor\\VectorBD\\KA_2_5\\projects\\KA_Vector\\graphdb\\graph.db"
+      }
+    },
+    {
+      "name": "ERP_Vector",
+      "description": "1С:ERP",
+      "cwd": "C:\\Cursor\\MCP_Distr\\1c-vector-search-ERP_Vector",
+      "command": "C:\\path\\to\\python.exe",
+      "args": ["run_server.py"],
+      "env": {
+        "PROJECT_PROFILE": "ERP_Vector",
+        "VECTORDB_PATH": "C:\\Cursor\\VectorBD\\ERP\\projects\\ERP_Vector\\vectordb",
+        "GRAPHDB_PATH": "C:\\Cursor\\VectorBD\\ERP\\projects\\ERP_Vector\\graphdb\\graph.db"
+      }
+    }
+  ]
+}

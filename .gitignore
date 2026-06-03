@@ -19,6 +19,9 @@ vectordb/
 *.env.local
 local.env
 
+# Локальный реестр web-приложения (копия example с путями машины)
+app/mcp_registry.json
+
 # IDE
 .vscode/
 .idea/

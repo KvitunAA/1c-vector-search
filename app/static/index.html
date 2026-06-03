@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>1С Vector MCP — Чат по конфигурации</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <h1 class="brand">1С Vector MCP</h1>
+      <p class="subtitle">Семантический поиск по конфигурации + ответ LM Studio</p>
+
+      <section class="panel">
+        <h2>MCP-сервер</h2>
+        <select id="serverSelect"></select>
+        <div id="serverInfo" class="muted small"></div>
+      </section>
+
+      <section class="panel">
+        <h2>LM Studio</h2>
+        <label>Базовый URL
+          <input id="lmBase" type="text" value="http://localhost:1234/v1" />
+        </label>
+        <label>Модель чата
+          <input id="lmModel" type="text" list="lmModels" placeholder="автоопределение" />
+          <datalist id="lmModels"></datalist>
+        </label>
+        <div class="row">
+          <label class="half">Температура
+            <input id="temperature" type="number" value="0.2" step="0.1" min="0" max="2" />
+          </label>
+          <label class="half">Max tokens
+            <input id="maxTokens" type="number" value="1024" step="128" min="64" max="8192" />
+          </label>
+        </div>
+        <div class="row">
+          <label class="half">Результатов
+            <input id="limit" type="number" value="5" min="1" max="20" />
+          </label>
+          <label class="half checkbox">
+            <input id="useGraph" type="checkbox" />
+            Граф связей
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <button id="healthBtn" class="secondary">Проверить подключение</button>
+        <div id="healthStatus" class="status-list"></div>
+      </section>
+    </aside>
+
+    <main class="content">
+      <div class="chat" id="chat"></div>
+
+      <form class="composer" id="composer">
+        <textarea id="question" rows="2" placeholder="Задайте вопрос по конфигурации 1С…"></textarea>
+        <button id="sendBtn" type="submit">Спросить</button>
+      </form>
+    </main>
+
+    <aside class="inspector">
+      <div class="tabs">
+        <button class="tab active" data-tab="code">Код</button>
+        <button class="tab" data-tab="metadata">Метаданные</button>
+        <button class="tab" data-tab="forms">Формы</button>
+        <button class="tab" data-tab="graph">Граф</button>
+      </div>
+      <div class="tab-body" id="tab-code"></div>
+      <div class="tab-body hidden" id="tab-metadata"></div>
+      <div class="tab-body hidden" id="tab-forms"></div>
+      <div class="tab-body hidden" id="tab-graph"></div>
+    </aside>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

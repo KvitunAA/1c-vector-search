@@ -1,0 +1,10 @@
+# Зависимости web-приложения (app/) поверх vector MCP-сервера.
+# Устанавливается дополнительно к requirements.txt:
+#   pip install -r requirements-app.txt
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+httpx>=0.26.0
+
+# MCP-клиент (stdio). Обычно уже установлен из requirements.txt.
+mcp>=0.9.0

@@ -1,21 +1,33 @@
 # 1c-vector-search MCP Server
 
-MCP-сервер для семантического поиска по коду и метаданным конфигураций 1С (ЗУП, УТ, ERP и т.п.). Работает локально через ChromaDB и SQLite, без Docker.
+MCP-сервер для семантического поиска по коду и метаданным конфигураций 1С (ЗУП, УТ, ERP и т.п.). Работает локально через **sqlite-vec** (векторный поиск) и **Kuzu** (граф зависимостей), без Docker.
+
+### Что нового (03–04.06.2026) — [v0.4.0](RELEASE_NOTES_v0.4.0.md)
+
+- **Хранилища (breaking):** ChromaDB → **sqlite-vec**, граф SQLite → **Kuzu**. Нужна полная переиндексация (`--clear`). См. [миграцию](RELEASE_NOTES_v0.4.0.md#миграция-с-v03x).
+- **Расширения, pptx-plan, батчи, парсер** — см. полный список в [`RELEASE_NOTES_v0.4.0.md`](RELEASE_NOTES_v0.4.0.md).
+
+### Что нового (04.06.2026) — Web-приложение MCP Chat
+
+- **`app/`** — локальная web-витрина: выбор vector MCP-профиля, вопрос по конфигурации, ответ **чат-модели LM Studio**, панель источников (код / метаданные / формы) и SVG-граф зависимостей.
+- **`run_app.cmd`** — запуск на `http://127.0.0.1:8765`; зависимости: `pip install -r requirements-app.txt`.
+- **`app/mcp_registry.example.json`** — пример реестра серверов (KA, ERP, ZUP и др.) с путями к `VECTORDB_PATH` / `GRAPHDB_PATH`.
+- MCP-сервер для Cursor **не меняется**; приложение — отдельный stdio-клиент. Подробности: [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md).
 
 ### Что нового (25.03.2026)
 
 - **Расширения конфигурации:** отдельные БД без затрагивания основной выгрузки — переменные `EXTENSION_CONFIG_PATH`, `EXTENSION_VECTORDB_PATH`, `EXTENSION_GRAPHDB_PATH` в профиле; флаг **`--extension`** в `index_config.py` и `index_graph_mp.py`; скрипты `run_index_extension_vector_*.cmd`, `run_index_extension_graph_*.cmd`, `run_index_extension_full_*.cmd`; модуль **`config_dump.py`** (тип выгрузки по корневому `Configuration.xml`); в `Config.show()` выводятся пути расширения.
 - **Сводная индексация:** **`run_index_all.py`** и **`run_index_all_your_project.cmd`** — последовательно векторная БД и граф основной конфигурации, затем (если задан `EXTENSION_CONFIG_PATH`) вектор и граф расширения; опционально **`INDEX_GRAPH_WORKERS`** для шагов с графом.
 - **`init_project.py`:** при создании проекта добавляются перечисленные скрипты расширения и `run_index_all_<имя>.cmd`, в шаблон `.env` — блок `EXTENSION_*`.
-- **Тесты и парсер:** в **`extract_metadata_references_from_code`** поиск коллекции по ключу с **`casefold()`** (регистр вроде `справочники` / `Справочники`); в тестовой заглушке эмбеддингов — **`embed_query`** для вызовов Chroma при `query()`.
+- **Тесты и парсер:** в **`extract_metadata_references_from_code`** поиск коллекции по ключу с **`casefold()`** (регистр вроде `справочники` / `Справочники`).
 
 ## Состав проекта
 
 - **Python-модули** — полная реализация MCP-сервера, индексатора и графа зависимостей:
   - `server.py` — MCP-сервер (stdio-транспорт для Cursor)
   - `config.py` — загрузка конфигурации из профилей
-  - `vectordb_manager.py` — работа с ChromaDB
-  - `graph_db.py` — граф зависимостей (SQLite)
+  - `vectordb_manager.py` — векторная БД (sqlite-vec)
+  - `graph_db.py` — граф зависимостей (Kuzu, Cypher)
   - `parser_1c.py` — парсер BSL и XML метаданных 1С
   - `code_grep.py` — grep по исходникам для find_1c_method_usage
   - `index_config.py` — индексация кода, метаданных, форм и графа
@@ -28,6 +40,7 @@ MCP-сервер для семантического поиска по коду 
 - **Всё сразу** — `run_index_all_your_project.cmd` / `python run_index_all.py`: основная конфигурация (вектор + граф), затем расширение (вектор + граф), если задан `EXTENSION_CONFIG_PATH`
 - **Расширение** — `run_index_extension_vector_your_project.cmd`, `run_index_extension_graph_your_project.cmd`, `run_index_extension_full_your_project.cmd` (отдельные БД без затрагивания основной конфигурации)
 - **Схемы MCP** — `SERVER_METADATA.json`, `tools/*.json` — описание инструментов для клиентов
+- **Web-приложение** — `app/` — чат по конфигурации через браузер (см. [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md))
 
 ## Быстрый старт
 
@@ -36,6 +49,7 @@ MCP-сервер для семантического поиска по коду 
 ```cmd
 cd 1c-vector-search
 pip install -r requirements.txt
+pip install -r requirements-app.txt
 ```
 
 ### 2. Настройка профиля
@@ -100,6 +114,16 @@ Cursor запускает MCP-сервер автоматически при о�
 run_server_your_project.cmd
 ```
 
+### 7. Web-приложение (MCP Chat)
+
+После индексации профиля можно задавать вопросы в браузере (ответ — модель чата из LM Studio):
+
+```cmd
+run_app.cmd
+```
+
+Откройте **http://127.0.0.1:8765**. В боковой панели выберите MCP-сервер, укажите URL LM Studio (`http://localhost:1234/v1` по умолчанию) и модель чата. Для нескольких конфигураций скопируйте `app/mcp_registry.example.json` → `app/mcp_registry.json` и пропишите пути к базам.
+
 ## Обезличенные параметры
 
 В шаблоне используются плейсхолдеры:
@@ -118,8 +142,8 @@ run_server_your_project.cmd
 | Переменная | Назначение | Значение по умолчанию в профиле |
 |------------|------------|--------------------------------|
 | `EXTENSION_CONFIG_PATH` | Корень выгрузки расширения (где лежит `Configuration.xml`) | не задано |
-| `EXTENSION_VECTORDB_PATH` | Каталог Chroma только для расширения | `projects/<профиль>/extension_vectordb` |
-| `EXTENSION_GRAPHDB_PATH` | Файл SQLite графа только для расширения | `projects/<профиль>/extension_graphdb/graph.db` |
+| `EXTENSION_VECTORDB_PATH` | Каталог векторной БД только для расширения | `projects/<профиль>/extension_vectordb` |
+| `EXTENSION_GRAPHDB_PATH` | Каталог графа Kuzu только для расширения | `projects/<профиль>/extension_graphdb/graph.db` |
 
 **Одним запуском — основная конфигурация и расширение:** `run_index_all_your_project.cmd` или `python run_index_all.py` (после `set PROJECT_PROFILE=...`). Выполняется по шагам: векторная БД основной конфигурации → граф основной конфигурации → векторная БД расширения → граф расширения. Если `EXTENSION_CONFIG_PATH` не задан, выполняются только шаги 1–2. Число процессов для графа задаётся переменной `INDEX_GRAPH_WORKERS` (по умолчанию `8`).
 
@@ -267,6 +291,13 @@ CHUNK_OVERLAP_TOKENS=100
 ---
 
 ## История изменений
+
+### 04.06.2026 (v1.0.0) — Web-приложение MCP Chat
+
+- Каталог **`app/`**: FastAPI backend, MCP stdio-клиент, RAG (`search_1c_*` + опционально граф), клиент LM Studio.
+- UI: выбор сервера, настройки модели, чат, вкладки источников, SVG-визуализация `graph_dependencies` / `graph_references`.
+- **`requirements-app.txt`**, **`run_app.cmd`**, **`app/mcp_registry.example.json`**.
+- Полное описание релиза: [RELEASE_v1.0.0.md](RELEASE_v1.0.0.md).
 
 ### 23.03.2026 — эвристика символов/токен; чанки без дублирования комментариев
 
