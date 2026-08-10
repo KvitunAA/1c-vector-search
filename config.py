@@ -126,6 +126,12 @@ class Config:
         "GRAPHDB_PATH",
         str(PROFILE_DIR / "graphdb" / "graph.db")
     )
+    # MCP-сервер открывает граф только на чтение. Пишущий процесс Kuzu берёт
+    # эксклюзивную блокировку каталога БД, поэтому при read-write одновременно
+    # может работать лишь один экземпляр сервера. В режиме только-чтения их может
+    # быть несколько (локальный на сервере + подключённые по SSH).
+    # На индексацию не влияет: индексаторы всегда открывают БД на запись.
+    GRAPHDB_READ_ONLY = os.getenv("GRAPHDB_READ_ONLY", "true").lower() in ("true", "1", "yes")
 
     # Выгрузка расширения конфигурации и отдельные БД (не пересекаются с основной конфигурацией)
     EXTENSION_CONFIG_PATH = os.getenv("EXTENSION_CONFIG_PATH", "")
@@ -209,6 +215,11 @@ class Config:
     DEFAULT_SEARCH_LIMIT = int(os.getenv("DEFAULT_SEARCH_LIMIT", "5"))
     MAX_SEARCH_LIMIT = int(os.getenv("MAX_SEARCH_LIMIT", "20"))
 
+    # Предел времени обхода выгрузки в find_1c_method_usage (секунды, 0 — без предела).
+    # Редкое имя означало полный обход конфигурации: на ERP это минуты, за которые
+    # MCP-клиент отваливается по таймауту, а процесс на сервере продолжает работать.
+    GREP_TIME_BUDGET_SEC = float(os.getenv("GREP_TIME_BUDGET_SEC", "20"))
+
     VECTOR_DISTANCE_METRIC = os.getenv("VECTOR_DISTANCE_METRIC", "cosine")
     HYBRID_SEARCH_ALPHA = float(os.getenv("HYBRID_SEARCH_ALPHA", "0.7"))
     SEARCH_USE_MMR = os.getenv("SEARCH_USE_MMR", "true").lower() in ("true", "1", "yes")
@@ -246,6 +257,7 @@ class Config:
         logger.info(f"Путь к конфигурации 1С: {cls.CONFIG_PATH}")
         logger.info(f"Путь к векторной БД (sqlite-vec): {cls.VECTORDB_PATH}")
         logger.info(f"Путь к графовой БД (Kuzu): {cls.GRAPHDB_PATH}")
+        logger.info(f"Граф открывается сервером: {'только чтение' if cls.GRAPHDB_READ_ONLY else 'чтение и запись'}")
         logger.info(f"Расширение — выгрузка (EXTENSION_CONFIG_PATH): {cls.EXTENSION_CONFIG_PATH or '(не задано)'}")
         logger.info(f"Расширение — векторная БД: {cls.EXTENSION_VECTORDB_PATH}")
         logger.info(f"Расширение — граф: {cls.EXTENSION_GRAPHDB_PATH}")

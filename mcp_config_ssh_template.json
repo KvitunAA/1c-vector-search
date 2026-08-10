@@ -1,0 +1,20 @@
+{
+  "_comment": "Подключение MCP-сервера, работающего на УДАЛЁННОЙ машине через SSH. ВАЖНО: НЕ оборачивайте вызов в 'cmd /c' — sshd на Windows и так запускает команду через cmd.exe, а вложенность добавляет лишнюю кавычку в аргумент (имя профиля приезжает как ERP\" и путь превращается в projects\\ERP\"\\vectordb). Подробности и диагностика — SSH_REMOTE.md.",
+  "mcpServers": {
+    "1c-vector-search-remote": {
+      "command": "ssh",
+      "args": [
+        "-T",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+        "-i", "C:\\Users\\USERNAME\\.ssh\\id_ed25519_mcp",
+        "mcp-user@SERVER_HOST",
+        "C:\\path\\to\\1c-vector-search\\run_server_ssh.cmd",
+        "your_project"
+      ],
+      "description": "1c-vector-search на удалённом сервере (sqlite-vec + Kuzu на его диске, stdio поверх SSH)"
+    }
+  }
+}

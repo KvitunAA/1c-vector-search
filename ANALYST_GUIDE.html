@@ -1,0 +1,406 @@
+<title>Поиск по конфигурации ERP из ChatGPT — памятка аналитику</title>
+<style>
+  :root {
+    --ground:      #F6F8FA;
+    --surface:     #FFFFFF;
+    --ink:         #1A2230;
+    --ink-soft:    #57616F;
+    --ink-faint:   #7C8797;
+    --rule:        #DCE2EA;
+    --accent:      #2F5D8C;
+    --accent-soft: #E9EFF7;
+    --warn:        #93571A;
+    --warn-soft:   #FAF0E1;
+    --warn-rule:   #E8D3B0;
+
+    --display: Cambria, Georgia, "Times New Roman", serif;
+    --body: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --mono: Consolas, "Courier New", monospace;
+
+    --measure: 34rem;
+    --step-1: 0.82rem;
+    --step0:  1.0rem;
+    --step1:  1.16rem;
+    --step2:  1.45rem;
+    --step3:  1.95rem;
+    --step4:  2.6rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #11151B;
+      --surface:     #191E26;
+      --ink:         #E6EAF0;
+      --ink-soft:    #9BA6B4;
+      --ink-faint:   #77828F;
+      --rule:        #29303A;
+      --accent:      #83AEDC;
+      --accent-soft: #1B2735;
+      --warn:        #DBA463;
+      --warn-soft:   #251E13;
+      --warn-rule:   #40331F;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #11151B;
+    --surface:     #191E26;
+    --ink:         #E6EAF0;
+    --ink-soft:    #9BA6B4;
+    --ink-faint:   #77828F;
+    --rule:        #29303A;
+    --accent:      #83AEDC;
+    --accent-soft: #1B2735;
+    --warn:        #DBA463;
+    --warn-soft:   #251E13;
+    --warn-rule:   #40331F;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: var(--step0);
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3rem;
+  }
+
+  .eyebrow {
+    font-size: var(--step-1);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 0.9rem;
+    font-weight: 600;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-size: var(--step4);
+    line-height: 1.14;
+    font-weight: 700;
+    margin: 0 0 1rem;
+    text-wrap: balance;
+    letter-spacing: -0.012em;
+  }
+
+  h2 {
+    font-family: var(--display);
+    font-size: var(--step2);
+    line-height: 1.25;
+    font-weight: 700;
+    margin: 0 0 0.85rem;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-size: var(--step1);
+    font-weight: 650;
+    margin: 0 0 0.35rem;
+    line-height: 1.35;
+  }
+
+  p { margin: 0 0 0.9rem; }
+  p:last-child { margin-bottom: 0; }
+
+  .lede {
+    font-size: var(--step1);
+    color: var(--ink-soft);
+    max-width: 30rem;
+  }
+
+  section { display: flex; flex-direction: column; }
+
+  /* Шаги — реальная последовательность, поэтому нумерация здесь несёт смысл */
+  .steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.6rem;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 2.4rem 1fr;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .step-num {
+    font-family: var(--display);
+    font-size: var(--step2);
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.15;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .step-body p { color: var(--ink-soft); }
+  .step-body p strong { color: var(--ink); font-weight: 600; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1.4rem 1.5rem;
+  }
+
+  .asks {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ask {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 0.7rem 1rem;
+    font-size: var(--step0);
+    border-radius: 0 3px 3px 0;
+  }
+
+  .limits {
+    background: var(--warn-soft);
+    border: 1px solid var(--warn-rule);
+    border-radius: 4px;
+    padding: 1.5rem;
+  }
+
+  .limits h2 { color: var(--warn); }
+
+  .limit-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.05rem;
+  }
+
+  .limit-list li { display: flex; flex-direction: column; gap: 0.15rem; }
+  .limit-list .q {
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .limit-list .a { color: var(--ink-soft); font-size: 0.95rem; }
+
+  .divider {
+    height: 1px;
+    background: var(--rule);
+    border: 0;
+    margin: 0;
+  }
+
+  .note {
+    font-size: 0.93rem;
+    color: var(--ink-faint);
+  }
+
+  kbd {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--accent-soft);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.1em 0.4em;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, kbd:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .footer-note {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.5rem;
+    color: var(--ink-faint);
+    font-size: 0.93rem;
+  }
+
+  @media (max-width: 30rem) {
+    .page { padding: 2.5rem 1.15rem 3.5rem; gap: 2.4rem; }
+    :root { --step4: 2rem; --step3: 1.6rem; --step2: 1.3rem; }
+    .step { grid-template-columns: 1.8rem 1fr; gap: 0.75rem; }
+  }
+</style>
+
+<div class="page">
+
+  <header>
+    <p class="eyebrow">Памятка · 1С:ERP</p>
+    <h1>Вопросы по конфигурации ERP прямо в ChatGPT</h1>
+    <p class="lede">
+      Теперь ChatGPT умеет искать по устройству нашей конфигурации 1С:ERP.
+      Спрашиваете обычными словами — он находит нужные объекты, код и связи между ними.
+    </p>
+  </header>
+
+  <hr class="divider" />
+
+  <section>
+    <h2>Что это такое</h2>
+    <p>
+      Внутри компании работает поисковая система по выгрузке нашей конфигурации ERP.
+      В ней проиндексировано больше миллиона фрагментов: код модулей, объекты метаданных,
+      формы и связи между ними.
+    </p>
+    <p>
+      ChatGPT получил к ней доступ. Вы задаёте вопрос по-русски — он сам решает, что искать,
+      и отвечает по реальному содержимому конфигурации, а не по общим знаниям про 1С.
+    </p>
+    <p class="note">
+      Ничего устанавливать не нужно. Всё работает на нашем сервере, вы просто пользуетесь чатом.
+    </p>
+  </section>
+
+  <section>
+    <h2>Как начать</h2>
+    <ol class="steps">
+
+      <li class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Включите доступ</h3>
+          <p>
+            В ChatGPT откройте <strong>Настройки → Коннекторы</strong>
+            (<kbd>Settings → Connectors</kbd>) и включите тот, что называется
+            <strong>1c-vector-search</strong>.
+          </p>
+          <p class="note">
+            Точное название подскажет тот, кто настраивал. Если коннектора в списке нет —
+            напишите ему, это не ваша проблема.
+          </p>
+        </div>
+      </li>
+
+      <li class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Спросите как обычно</h3>
+          <p>
+            Пишите живым языком, без специальных команд. Полезно прямо указать, что искать нужно
+            в конфигурации — например, начать со слов <strong>«Найди в конфигурации ERP…»</strong>.
+          </p>
+        </div>
+      </li>
+
+      <li class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Проверяйте ссылки на объекты</h3>
+          <p>
+            В ответе будут имена объектов и пути к файлам — по ним видно, откуда взят ответ.
+            Если имя объекта выглядит незнакомо, попросите показать код целиком.
+          </p>
+        </div>
+      </li>
+
+    </ol>
+  </section>
+
+  <section>
+    <h2>Что спрашивать</h2>
+    <p>Вопросы, на которые система отвечает хорошо:</p>
+    <ul class="asks">
+      <li class="ask">Найди в конфигурации ERP код, отвечающий за проведение реализации товаров</li>
+      <li class="ask">Что сломается, если изменить справочник «Соглашения с клиентами»?</li>
+      <li class="ask">Где используется процедура «ПриСозданииНаСервере»?</li>
+      <li class="ask">Какие объекты связаны с документом «Заказ клиента»?</li>
+      <li class="ask">Найди отчёты, связанные с прослеживаемостью товаров</li>
+    </ul>
+    <p class="note" style="margin-top: 1rem;">
+      Общий принцип: система сильна в вопросах «где это в коде», «что с чем связано»,
+      «что затронет изменение». Именно это дольше всего искать вручную.
+    </p>
+  </section>
+
+  <section class="limits">
+    <h2>Чего она не умеет</h2>
+    <p style="color: var(--ink-soft); margin-bottom: 1.2rem;">
+      Это важнее списка возможностей: зная границы, вы не потратите время на вопросы,
+      на которые ответа не будет.
+    </p>
+    <ul class="limit-list">
+
+      <li>
+        <span class="q">Не знает ваших данных</span>
+        <span class="a">
+          Проиндексировано <em>устройство</em> конфигурации, а не рабочая база.
+          Вопросы вида «сколько заказов за март» или «какой остаток по складу» — не сюда.
+        </span>
+      </li>
+
+      <li>
+        <span class="q">Не покажет состав реквизитов документа</span>
+        <span class="a">
+          В поисковый индекс попали имена объектов и код, но не списки реквизитов.
+          На вопрос «какие реквизиты у Заказа клиента» ответа не будет — смотрите в конфигураторе.
+        </span>
+      </li>
+
+      <li>
+        <span class="q">Не расскажет про ввод на основании</span>
+        <span class="a">
+          Список «на основании чего можно ввести документ» хранится отдельно и в индекс не входит.
+        </span>
+      </li>
+
+      <li>
+        <span class="q">Поиск по имени метода бывает неполным</span>
+        <span class="a">
+          Если совпадений мало, обход конфигурации прерывается по времени, и система честно
+          пишет об этом в ответе. Тогда список — не весь.
+        </span>
+      </li>
+
+      <li>
+        <span class="q">Это конкретная версия</span>
+        <span class="a">
+          Проиндексирована выгрузка конфигурации на определённую дату. После обновления ERP ответы
+          начнут отставать, пока индекс не пересоберут.
+        </span>
+      </li>
+
+    </ul>
+  </section>
+
+  <section>
+    <h2>Если что-то не работает</h2>
+    <p>
+      Самая частая картина: система отвечает <strong>«ничего не найдено»</strong> на вопросы,
+      которые раньше работали. Почти всегда это значит, что на сервере что-то остановилось,
+      а не что вы неправильно спросили.
+    </p>
+    <p>
+      Чинить самому не нужно и не получится. Напишите тому, кто настраивал, и приложите
+      свой вопрос — по нему сразу видно, где искать причину.
+    </p>
+  </section>
+
+  <p class="footer-note">
+    Поиск работает по выгрузке конфигурации 1С:ERP. Отвечает по коду и метаданным,
+    доступа к рабочим базам и данным у него нет.
+  </p>
+
+</div>

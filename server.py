@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 app = Server("1c-vector-search")
 db_manager = VectorDBManager()
-graph_manager = GraphDBManager()
+graph_manager = GraphDBManager(read_only=Config.GRAPHDB_READ_ONLY)
 
 logger.info("MCP Сервер запущен")
 logger.info(f"Векторная БД: {Config.VECTORDB_PATH}")
@@ -270,6 +270,7 @@ async def handle_call_tool(
             limit = arguments.get("limit", 10)
             logger.info(f"Поиск использования метода: '{method_name}' (limit={limit})")
             config_path = Path(Config.CONFIG_PATH) if Config.CONFIG_PATH else None
+            grep_results = None  # ветка ниже может не выполниться — не оставляем имя несвязанным
             if config_path and config_path.exists():
                 grep_results = grep_method_usage(method_name, config_path=config_path, limit=limit)
                 usages = [
@@ -321,6 +322,15 @@ async def handle_call_tool(
                 "total_usages": len(usages),
                 "usages": usages,
             }
+            # Без этой пометки неполный результат неотличим от «вхождений нет».
+            if getattr(grep_results, "truncated", False):
+                response["search_truncated"] = True
+                response["search_note"] = (
+                    f"Обход выгрузки прерван по времени ({Config.GREP_TIME_BUDGET_SEC} с), "
+                    f"просмотрено файлов: {grep_results.files_scanned}. "
+                    f"Список неполный — возможны и другие вхождения. "
+                    f"Уточните имя метода или увеличьте GREP_TIME_BUDGET_SEC."
+                )
             if graph_extra:
                 response["graph_related"] = graph_extra
                 response["graph_related_count"] = len(graph_extra)

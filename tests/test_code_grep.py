@@ -115,6 +115,60 @@ class TestGrepMethodUsage:
         results = grep_method_usage("Тест", config_path=tmp_path / "не_существует")
         assert results == []
 
+
+class TestGrepTimeBudget:
+    """Ограничение времени обхода: неполный результат должен быть помечен."""
+
+    @staticmethod
+    def _make_config(tmp_path, files=40):
+        config = tmp_path / "config"
+        config.mkdir()
+        for i in range(files):
+            d = config / "CommonModules" / f"Модуль{i}" / "Ext"
+            d.mkdir(parents=True)
+            # Объёмный файл без искомого имени: заставляет обход реально работать
+            body = "\n".join(f"    ПрочаяПроцедура{j}();" for j in range(400))
+            (d / "Module.bsl").write_text(
+                f"Процедура Тест{i}()\n{body}\nКонецПроцедуры\n", encoding="utf-8-sig"
+            )
+        return config
+
+    def test_not_truncated_when_budget_enough(self, tmp_path):
+        config = self._make_config(tmp_path, files=5)
+        results = grep_method_usage("ПрочаяПроцедура1", config_path=config, time_budget_sec=0)
+        assert results.truncated is False
+        assert len(results) > 0
+
+    def test_truncated_flag_on_exhausted_budget(self, tmp_path):
+        config = self._make_config(tmp_path, files=40)
+        # Бюджет заведомо меньше времени обхода — обход обязан прерваться
+        results = grep_method_usage(
+            "ЗаведомоОтсутствующийМетод", config_path=config, time_budget_sec=0.001
+        )
+        assert results.truncated is True
+        assert results.files_scanned < 40
+
+    def test_zero_budget_means_unlimited(self, tmp_path):
+        config = self._make_config(tmp_path, files=5)
+        results = grep_method_usage(
+            "ЗаведомоОтсутствующийМетод", config_path=config, time_budget_sec=0
+        )
+        assert results.truncated is False
+        assert results.files_scanned == 5
+        assert results == []
+
+    def test_behaves_like_list(self, tmp_path):
+        """Вызывающий код не должен заметить смены типа возврата."""
+        config = tmp_path / "config"
+        config.mkdir()
+        (config / "Module.bsl").write_text(
+            "Процедура Тест()\n    МояПроцедура();\nКонецПроцедуры\n", encoding="utf-8-sig"
+        )
+        results = grep_method_usage("МояПроцедура", config_path=config)
+        assert isinstance(results, list)
+        assert len(results) == 1
+        assert [r["in_method"] for r in results] == ["Тест"]
+
     def test_case_insensitive_search(self, tmp_path):
         config = tmp_path / "config"
         config.mkdir()

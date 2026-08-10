@@ -57,6 +57,51 @@ class TestGraphDBManagerInit:
         gm2.close()
 
 
+class TestReadOnly:
+    """Режим только-чтения: несколько MCP-серверов на одной БД."""
+
+    def test_missing_db_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            GraphDBManager(db_path=str(tmp_path / "нет-такой-бд"), read_only=True)
+
+    def test_reads_existing_data(self, graph_db_path):
+        gm = GraphDBManager(db_path=graph_db_path)
+        gm.add_node("metadata:Справочник:Номенклатура", "Metadata", "Номенклатура")
+        gm.close()
+
+        ro = GraphDBManager(db_path=graph_db_path, read_only=True)
+        assert ro.read_only is True
+        assert ro.get_stats()["nodes_count"] == 1
+        ro.close()
+
+    def test_writes_rejected(self, graph_db_path):
+        gm = GraphDBManager(db_path=graph_db_path)
+        gm.add_node("test:1", "Metadata", "Test")
+        gm.close()
+
+        ro = GraphDBManager(db_path=graph_db_path, read_only=True)
+        with pytest.raises(RuntimeError):
+            ro.add_node("test:2", "Metadata", "Test2")
+        with pytest.raises(RuntimeError):
+            ro.add_edge("test:1", "test:1", "REFERENCES")
+        with pytest.raises(RuntimeError):
+            ro.clear()
+        ro.close()
+
+    def test_two_readers_concurrently(self, graph_db_path):
+        """Ради чего всё затевалось: два процесса-читателя на одной БД."""
+        gm = GraphDBManager(db_path=graph_db_path)
+        gm.add_node("test:1", "Metadata", "Test")
+        gm.close()
+
+        first = GraphDBManager(db_path=graph_db_path, read_only=True)
+        second = GraphDBManager(db_path=graph_db_path, read_only=True)
+        assert first.get_stats()["nodes_count"] == 1
+        assert second.get_stats()["nodes_count"] == 1
+        first.close()
+        second.close()
+
+
 class TestAddNode:
     """Добавление узлов."""
 

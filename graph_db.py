@@ -22,21 +22,46 @@ class GraphDBManager:
     NODE_TYPES = ("Metadata", "Method", "Form")
     EDGE_TYPES = ("REFERENCES", "HAS_METHOD", "HAS_FORM", "ATTRIBUTE_TYPE", "USES_IN_CODE")
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, read_only: bool = False):
+        """
+        Args:
+            db_path: каталог БД Kuzu
+            read_only: открыть БД только на чтение. Kuzu даёт пишущему процессу
+                ЭКСКЛЮЗИВНУЮ блокировку каталога, поэтому одновременно работать
+                могут только читатели. Для MCP-сервера (он лишь читает) это
+                позволяет держать несколько экземпляров сразу — например,
+                локальный на сервере и подключённый по SSH с другой машины.
+        """
         self.db_path = Path(db_path or Config.GRAPHDB_PATH)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        if not read_only:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        elif not self.db_path.exists():
+            raise FileNotFoundError(
+                f"Графовая БД не найдена: {self.db_path}. "
+                f"В режиме только-чтения она не создаётся — выполните индексацию графа."
+            )
         self._db: Optional[kuzu.Database] = None
         self._conn: Optional[kuzu.Connection] = None
-        self._init_db()
-        logger.info(f"Графовая БД (Kuzu) инициализирована: {self.db_path}")
+        if not read_only:
+            self._init_db()
+        mode = "только чтение" if read_only else "чтение и запись"
+        logger.info(f"Графовая БД (Kuzu) инициализирована: {self.db_path} ({mode})")
 
     def _get_conn(self) -> kuzu.Connection:
         if self._conn is None:
-            self._db = kuzu.Database(str(self.db_path))
+            self._db = kuzu.Database(str(self.db_path), read_only=self.read_only)
             self._conn = kuzu.Connection(self._db)
         return self._conn
 
+    def _require_writable(self, action: str):
+        if self.read_only:
+            raise RuntimeError(
+                f"{action}: графовая БД открыта только на чтение (read_only=True)."
+            )
+
     def _init_db(self):
+        self._require_writable("Создание схемы")
         conn = self._get_conn()
         conn.execute(
             """
@@ -58,6 +83,7 @@ class GraphDBManager:
 
     def clear(self):
         """Очистка графа перед переиндексацией"""
+        self._require_writable("Очистка графа")
         conn = self._get_conn()
         conn.execute("MATCH (n:Node) DETACH DELETE n")
         logger.info("Граф очищен")
@@ -73,6 +99,7 @@ class GraphDBManager:
         extra: Optional[Dict] = None,
     ):
         """Добавление узла (upsert через MERGE)"""
+        self._require_writable("Добавление узла")
         if node_type not in self.NODE_TYPES:
             raise ValueError(f"Неизвестный тип узла: {node_type}")
         conn = self._get_conn()
@@ -105,6 +132,7 @@ class GraphDBManager:
         extra: Optional[Dict] = None,
     ):
         """Добавление ребра (дедупликация по источнику, цели и типу через MERGE)"""
+        self._require_writable("Добавление ребра")
         if edge_type not in self.EDGE_TYPES:
             raise ValueError(f"Неизвестный тип ребра: {edge_type}")
         conn = self._get_conn()
