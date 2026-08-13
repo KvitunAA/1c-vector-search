@@ -35,7 +35,7 @@ from loguru import logger
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -118,12 +118,24 @@ async def lifespan(_: Starlette):
 
 starlette_app = Starlette(
     debug=False,
-    routes=[
-        Route("/healthz", endpoint=healthz, methods=["GET"]),
-        Mount(PATH, app=handle_mcp),
-    ],
+    routes=[Route("/healthz", endpoint=healthz, methods=["GET"])],
     lifespan=lifespan,
 )
+
+
+async def app(scope: Scope, receive: Receive, send: Send) -> None:
+    """Диспетчер поверх Starlette.
+
+    MCP обслуживается здесь, а не через Mount, намеренно. Mount отдаёт 307 с
+    /mcp на /mcp/, а часть клиентов при перенаправлении выбрасывает заголовок
+    Authorization (так делает .NET/PowerShell) — запрос приходит без токена и
+    получает 401. Точное сравнение пути убирает перенаправление, и /mcp и /mcp/
+    работают одинаково для любого клиента.
+    """
+    if scope["type"] == "http" and scope["path"].rstrip("/") == PATH.rstrip("/"):
+        await handle_mcp(scope, receive, send)
+        return
+    await starlette_app(scope, receive, send)
 
 
 def main():
@@ -133,7 +145,7 @@ def main():
         logger.info(f"Разрешённые Host: {', '.join(ALLOWED_HOSTS)}")
     else:
         logger.info("Проверка Host отключена (MCP_HTTP_ALLOWED_HOSTS не задан)")
-    uvicorn.run(starlette_app, host=HOST, port=PORT, log_level=Config.LOG_LEVEL.lower())
+    uvicorn.run(app, host=HOST, port=PORT, log_level=Config.LOG_LEVEL.lower())
 
 
 if __name__ == "__main__":
