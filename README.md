@@ -1,6 +1,15 @@
 # 1c-vector-search MCP Server
 
-MCP-сервер для семантического поиска по коду и метаданным конфигураций 1С (ЗУП, УТ, ERP и т.п.). Работает локально через **sqlite-vec** (векторный поиск) и **Kuzu** (граф зависимостей), без Docker.
+MCP-сервер для семантического поиска по коду и метаданным конфигураций 1С (ЗУП, ERP, КА, БУХ, УТ и др.). Работает локально через **sqlite-vec** (векторный поиск) и **Kuzu** (граф зависимостей), без Docker.
+
+**Один репозиторий — несколько конфигураций:** профиль на каждую выгрузку 1С, отдельное имя MCP в Cursor (`@tip_zup`, `@tip_erp`, …). См. [MCP_SETUP.md](projects/your_project/MCP_SETUP.md) и `python scripts/sync_mcp_config.py`.
+
+### Что нового (02.09.2026) — [v0.4.1](RELEASE_NOTES_v0.4.1.md)
+
+- **Граф (tip_zup):** `graph_staging` + `compact_graph`, флаг **`--staging`**, lookup `Documents.Имя` в графе, large-graph batching, `GRAPH_*` настройки.
+- **Мульти-конфиг MCP:** `mcp_profiles.py`, `scripts/sync_mcp_config.py`, `MCP_SERVER_NAME` / `CONFIG_DESCRIPTION` в профиле.
+- **Устойчивость:** индексация графа при lock MCP; CSV-safe LOAD для синонимов с запятыми.
+- Полный список: [`RELEASE_NOTES_v0.4.1.md`](RELEASE_NOTES_v0.4.1.md).
 
 ### Что нового (03–04.06.2026) — [v0.4.0](RELEASE_NOTES_v0.4.0.md)
 
@@ -28,6 +37,9 @@ MCP-сервер для семантического поиска по коду 
   - `config.py` — загрузка конфигурации из профилей
   - `vectordb_manager.py` — векторная БД (sqlite-vec)
   - `graph_db.py` — граф зависимостей (Kuzu, Cypher)
+  - `graph_staging.py`, `compact_graph.py` — опциональная сборка графа через CSV (`--staging`)
+  - `object_identifier.py` — разбор qualified name для графа (`Documents.Имя`)
+  - `mcp_profiles.py` — автогенерация MCP-записей для нескольких профилей
   - `parser_1c.py` — парсер BSL и XML метаданных 1С
   - `code_grep.py` — grep по исходникам для find_1c_method_usage
   - `index_config.py` — индексация кода, метаданных, форм и графа
@@ -52,12 +64,24 @@ pip install -r requirements.txt
 pip install -r requirements-app.txt
 ```
 
-### 2. Настройка профиля
+### 2. Настройка профиля (одна или несколько конфигураций)
 
-1. Переименуйте `projects/your_project` в `projects/<имя_проекта>` (например, `Vector`).
+**Рекомендуется — через `init_project.py`:**
+
+```cmd
+python init_project.py -n tip_zup -c "D:\1C\ZUP\Config" -m tip_zup -d "MCP: ЗУП" --add-mcp -y
+python init_project.py -n tip_erp -c "D:\1C\ERP\Config" -m tip_erp -d "MCP: ERP" --add-mcp -y
+python scripts\sync_mcp_config.py --cursor
+```
+
+**Вручную:**
+
+1. Переименуйте `projects/your_project` в `projects/<имя_проекта>` (например, `tip_zup`).
 2. Переименуйте `your_project.env` в `<имя>.env`.
 3. Отредактируйте `.env`:
    - **CONFIG_PATH** — путь к выгрузке конфигурации 1С (корень, где лежит `Configuration.xml`)
+   - **MCP_SERVER_NAME** — имя MCP в Cursor (например, `tip_zup`)
+   - **CONFIG_DESCRIPTION** — описание в mcp.json
    - **EMBEDDING_API_BASE** — URL API эмбеддингов (LM Studio, LocalAI и т.д.), или оставьте пустым для локальной модели
    - **EMBEDDING_MODEL** — имя модели эмбеддингов
    - **EMBEDDING_DIMENSION** — определяется автоматически по модели (см. `KNOWN_MODELS` в `config.py`). Задавайте явно, только если модель не распознана
@@ -80,6 +104,13 @@ run_index_your_project.cmd
 run_index_graph_your_project.cmd
 ```
 
+**Компактная сборка графа** (staging CSV → COPY, меньше bloat в Kuzu):
+
+```cmd
+set STAGING=1
+run_index_graph_your_project.cmd
+```
+
 Или через Python:
 
 ```cmd
@@ -91,7 +122,22 @@ python run_indexer.py --clear --vector-only
 
 `Ctrl+Shift+P` → **"MCP: Edit Config File"**
 
-Добавьте в `mcpServers` (замените `C:\project` на путь к папке проекта):
+**Несколько конфигураций** — после `init_project.py` выполните `python scripts\sync_mcp_config.py --cursor` или добавьте записи вручную (имя = `MCP_SERVER_NAME`):
+
+```json
+"tip_zup": {
+  "command": "cmd",
+  "args": ["/c", "C:\\project\\run_server_tip_zup.cmd"],
+  "env": {
+    "PROJECT_PROFILE": "tip_zup",
+    "VECTORDB_PATH": "C:\\project\\projects\\tip_zup\\vectordb",
+    "GRAPHDB_PATH": "C:\\project\\projects\\tip_zup\\graphdb\\graph.db"
+  },
+  "description": "MCP: Зарплата и управление персоналом"
+}
+```
+
+**Один профиль** (шаблон):
 
 ```json
 "1c-vector-search": {
@@ -105,6 +151,8 @@ python run_indexer.py --clear --vector-only
   "description": "MCP сервер для семантического поиска по конфигурации 1С"
 }
 ```
+
+Подробнее: [projects/your_project/MCP_SETUP.md](projects/your_project/MCP_SETUP.md).
 
 ### 6. Запуск MCP
 
@@ -292,6 +340,13 @@ CHUNK_OVERLAP_TOKENS=100
 
 ## История изменений
 
+### 02.09.2026 (v0.4.1) — граф tip_zup, staging, мульти-конфиг MCP
+
+- **Граф:** `graph_staging.py`, `compact_graph.py`, `--staging`, `object_identifier`, qualified lookup в `graph_dependencies`/`graph_references`, large-graph batching, `GRAPH_*` в config.
+- **MCP:** `mcp_profiles.py`, `scripts/sync_mcp_config.py`, `MCP_SERVER_NAME` — один репозиторий, несколько конфигураций (ЗУП, ERP, КА, …).
+- **Устойчивость:** lock MCP при индексации; CSV-safe LOAD для ролей с запятыми в синонимах.
+- Полное описание: [RELEASE_NOTES_v0.4.1.md](RELEASE_NOTES_v0.4.1.md).
+
 ### 04.06.2026 (v1.0.0) — Web-приложение MCP Chat
 
 - Каталог **`app/`**: FastAPI backend, MCP stdio-клиент, RAG (`search_1c_*` + опционально граф), клиент LM Studio.
@@ -452,6 +507,7 @@ python run_indexer.py --clear --no-cache
 | --clear | Очистить граф перед индексацией (сбрасывает чекпоинт) |
 | --no-cache | Игнорировать кэш сканирования и пересканировать файлы |
 | --workers N | Количество процессов (по умолчанию: cpu_count - 1, `--workers 1` для однопроцессорного режима) |
+| --staging | Staging CSV + compact COPY (компактная graph.db; см. `GRAPH_STAGING_PATH`) |
 
 > **Примечание:** `index_graph.py` (без `_mp`) оставлен для обратной совместимости и помечен как deprecated.
 > Используйте `index_graph_mp.py --workers 1` как полную замену однопроцессорной версии.

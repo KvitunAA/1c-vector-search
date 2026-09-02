@@ -32,6 +32,14 @@ python scripts\sync_mcp_config.py --cursor
 
 ---
 
+## Текущие изменения (02.09.2026) — v0.4.1
+
+- **Граф (tip_zup):** staging CSV, compact COPY, `--staging`, lookup `Documents.Имя`, `GRAPH_*` настройки.
+- **Мульти-конфиг MCP:** `MCP_SERVER_NAME`, `sync_mcp_config.py` — ЗУП, ERP, КА из одного репозитория.
+- См. [RELEASE_NOTES_v0.4.1.md](../RELEASE_NOTES_v0.4.1.md).
+
+---
+
 ## Текущие изменения (02.03.2026)
 
 - **Структура профилей** — каждая подпапка `projects/<имя>/` содержит `.env`, `vectordb/`, `graphdb/` и документацию.

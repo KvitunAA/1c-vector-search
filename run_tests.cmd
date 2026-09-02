@@ -14,4 +14,4 @@ if not exist "%PYTHON%" (
   exit /b 1
 )
 
-"%PYTHON%" -m pytest tests\test_graph_db.py %*
+"%PYTHON%" -m pytest tests\test_object_identifier.py tests\test_graph_staging.py tests\test_graph_db.py tests\test_mcp_profiles.py %*
