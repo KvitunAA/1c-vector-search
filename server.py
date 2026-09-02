@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -30,7 +31,17 @@ logger = logging.getLogger(__name__)
 
 app = Server("1c-vector-search")
 db_manager = VectorDBManager()
-graph_manager = GraphDBManager()
+
+
+@contextmanager
+def _graph_session():
+    """Открывает граф только на время запроса, чтобы индексатор мог писать graph.db."""
+    manager = GraphDBManager(read_only=True, lock_retries=3, lock_retry_delay=0.4)
+    try:
+        yield manager
+    finally:
+        manager.close()
+
 
 logger.info("MCP Сервер запущен")
 logger.info(f"Векторная БД: {Config.VECTORDB_PATH}")
@@ -301,7 +312,8 @@ async def handle_call_tool(
                         if len(usages) >= limit:
                             break
 
-            graph_deps = graph_manager.get_dependencies(method_name, limit=20)
+            with _graph_session() as graph:
+                graph_deps = graph.get_dependencies(method_name, limit=20)
             caller_objects = set()
             for u in usages:
                 caller_objects.add(u["object"])
@@ -395,7 +407,8 @@ async def handle_call_tool(
             if not object_name:
                 return [types.TextContent(type="text", text=json.dumps({"error": "object_name обязателен и не может быть пустым"}, ensure_ascii=False))]
             logger.info(f"Граф: зависимости объекта '{object_name}' (limit={limit})")
-            deps = graph_manager.get_dependencies(object_name, limit=limit)
+            with _graph_session() as graph:
+                deps = graph.get_dependencies(object_name, limit=limit)
             response = {"object_name": object_name, "description": "Объекты, которые ссылаются на указанный объект", "total_count": len(deps), "dependencies": deps}
             return [types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False, indent=2))]
 
@@ -408,13 +421,15 @@ async def handle_call_tool(
             if not object_name:
                 return [types.TextContent(type="text", text=json.dumps({"error": "object_name обязателен и не может быть пустым"}, ensure_ascii=False))]
             logger.info(f"Граф: ссылки объекта '{object_name}' (limit={limit})")
-            refs = graph_manager.get_references(object_name, limit=limit)
+            with _graph_session() as graph:
+                refs = graph.get_references(object_name, limit=limit)
             response = {"object_name": object_name, "description": "Объекты, на которые ссылается указанный объект", "total_count": len(refs), "references": refs}
             return [types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False, indent=2))]
 
         elif name == "graph_stats":
             logger.info("Граф: статистика")
-            stats = graph_manager.get_stats()
+            with _graph_session() as graph:
+                stats = graph.get_stats()
             response = {"database_path": str(Config.GRAPHDB_PATH), **stats}
             return [types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False, indent=2))]
 
@@ -449,7 +464,8 @@ async def main():
     else:
         logger.info(f"✅ Векторная БД готова: {sum(stats.values())} записей")
 
-    graph_stats = graph_manager.get_stats()
+    with _graph_session() as graph:
+        graph_stats = graph.get_stats()
     if graph_stats["nodes_count"] == 0:
         logger.warning("⚠️  Граф пуст! Запустите индексацию: run_index_your_project.cmd или run_index_graph_your_project.cmd")
     else:
@@ -470,8 +486,7 @@ async def main():
                 ),
             )
     finally:
-        graph_manager.close()
-        logger.info("Графовая БД закрыта")
+        logger.info("MCP сервер остановлен")
 
 
 if __name__ == "__main__":

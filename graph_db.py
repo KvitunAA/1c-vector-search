@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -28,6 +29,18 @@ _NODE_COLUMNS = (
     "extra",
 )
 _EDGE_COLUMNS = ("source", "target", "edge_type", "extra")
+# Kuzu LOAD FROM не разбирает RFC-кавычки CSV: запятая в синониме роли рвёт колонки.
+_CSV_UNSAFE_CHARS = frozenset(',;"\'\n\r')
+_LOCK_HINT = (
+    "Не удалось открыть граф {path}: файл занят. "
+    "Остановите MCP-сервер 1c-vector-search в Cursor и повторите индексацию."
+)
+_EMPTY_STATS = {
+    "nodes_count": 0,
+    "edges_count": 0,
+    "nodes_by_type": {},
+    "edges_by_type": {},
+}
 
 
 class GraphDBManager:
@@ -44,22 +57,79 @@ class GraphDBManager:
         "HAS_TEMPLATE",
     )
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        read_only: bool = False,
+        lock_retries: int = 5,
+        lock_retry_delay: float = 2.0,
+    ):
         self.db_path = Path(db_path or Config.GRAPHDB_PATH)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        self.lock_retries = max(1, lock_retries)
+        self.lock_retry_delay = max(0.0, lock_retry_delay)
         self._db: Optional[kuzu.Database] = None
         self._conn: Optional[kuzu.Connection] = None
+        self._unavailable = False
+        if read_only and not self._database_exists():
+            self._unavailable = True
+            logger.warning("Графовая БД не найдена (read-only): %s", self.db_path)
+            return
+        if not read_only:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
-        logger.info(f"Графовая БД (Kuzu) инициализирована: {self.db_path}")
+        logger.info("Графовая БД (Kuzu) инициализирована: %s", self.db_path)
+
+    def _database_exists(self) -> bool:
+        path = self.db_path
+        if not path.exists():
+            return False
+        if path.is_dir():
+            try:
+                return any(path.iterdir())
+            except OSError:
+                return False
+        return path.stat().st_size > 0
+
+    @staticmethod
+    def _is_lock_error(exc: BaseException) -> bool:
+        text = str(exc).lower()
+        return "lock" in text or "could not set lock" in text
+
+    def _open_database(self) -> None:
+        last_exc: Optional[BaseException] = None
+        for attempt in range(1, self.lock_retries + 1):
+            try:
+                self._db = kuzu.Database(str(self.db_path), read_only=self.read_only)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_lock_error(exc) or attempt >= self.lock_retries:
+                    break
+                logger.warning(
+                    "Граф занят (попытка %s/%s): %s",
+                    attempt,
+                    self.lock_retries,
+                    exc,
+                )
+                time.sleep(self.lock_retry_delay)
+        if last_exc is not None and self._is_lock_error(last_exc):
+            raise RuntimeError(_LOCK_HINT.format(path=self.db_path)) from last_exc
+        if last_exc is not None:
+            raise last_exc
 
     def _get_conn(self) -> kuzu.Connection:
+        if self._unavailable:
+            raise RuntimeError(f"Графовая БД недоступна: {self.db_path}")
         if self._conn is None:
-            self._db = kuzu.Database(str(self.db_path))
+            self._open_database()
             self._conn = kuzu.Connection(self._db)
         return self._conn
 
     def _init_db(self):
         conn = self._get_conn()
+        if self.read_only:
+            return
         conn.execute(
             """
             CREATE NODE TABLE IF NOT EXISTS Node(
@@ -219,6 +289,27 @@ class GraphDBManager:
             deduped[key] = normalized
         return list(deduped.values())
 
+    @staticmethod
+    def _value_needs_rowwise(value: str) -> bool:
+        return bool(value) and any(char in _CSV_UNSAFE_CHARS for char in value)
+
+    @staticmethod
+    def _row_needs_rowwise(row: Dict[str, str]) -> bool:
+        return any(GraphDBManager._value_needs_rowwise(value) for value in row.values())
+
+    @staticmethod
+    def _partition_csv_safe(
+        rows: List[Dict[str, str]],
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        csv_rows: List[Dict[str, str]] = []
+        rowwise: List[Dict[str, str]] = []
+        for row in rows:
+            if GraphDBManager._row_needs_rowwise(row):
+                rowwise.append(row)
+            else:
+                csv_rows.append(row)
+        return csv_rows, rowwise
+
     def _write_rows_to_csv(self, rows: List[Dict[str, str]], columns: Sequence[str]) -> str:
         fd, path = tempfile.mkstemp(suffix=".csv", prefix="kuzu_batch_")
         os.close(fd)
@@ -283,19 +374,13 @@ class GraphDBManager:
 
         normalized = self._dedupe_nodes(nodes)
         batch_size = self._batch_size()
-        plain_nodes = []
-        nodes_with_extra = []
-        for node in normalized:
-            if node.get("extra"):
-                nodes_with_extra.append(node)
-            else:
-                plain_nodes.append(node)
+        plain_nodes, nodes_rowwise = self._partition_csv_safe(normalized)
 
         total_chunks = (len(plain_nodes) + batch_size - 1) // batch_size if plain_nodes else 0
         logger.info(
-            "Пакетная запись узлов: %s уникальных (%s с extra отдельно), чанков по %s: %s",
+            "Пакетная запись узлов: %s уникальных (%s построчно из-за запятых/кавычек/extra), чанков по %s: %s",
             len(normalized),
-            len(nodes_with_extra),
+            len(nodes_rowwise),
             batch_size,
             total_chunks,
         )
@@ -312,8 +397,8 @@ SET n.node_type = node_type,
         for chunk_index, chunk in enumerate(self._chunked(plain_nodes, batch_size), start=1):
             self._execute_load_from_rows(chunk, _NODE_COLUMNS, cypher_body)
             logger.debug("Записан чанк узлов %s/%s", chunk_index, total_chunks)
-        if nodes_with_extra:
-            self._flush_nodes_with_extra(nodes_with_extra)
+        if nodes_rowwise:
+            self._flush_nodes_with_extra(nodes_rowwise)
 
     def add_edges_batch(self, edges: List[Dict[str, Any]]) -> None:
         """Пакетное добавление рёбер (дедуп по source/target/edge_type)."""
@@ -322,19 +407,13 @@ SET n.node_type = node_type,
 
         normalized = self._dedupe_edges(edges)
         batch_size = self._batch_size()
-        plain_edges = []
-        edges_with_extra = []
-        for edge in normalized:
-            if edge.get("extra"):
-                edges_with_extra.append(edge)
-            else:
-                plain_edges.append(edge)
+        plain_edges, edges_rowwise = self._partition_csv_safe(normalized)
 
         total_chunks = (len(plain_edges) + batch_size - 1) // batch_size if plain_edges else 0
         logger.info(
-            "Пакетная запись рёбер: %s уникальных (%s с extra отдельно), чанков по %s: %s",
+            "Пакетная запись рёбер: %s уникальных (%s построчно из-за запятых/кавычек/extra), чанков по %s: %s",
             len(normalized),
-            len(edges_with_extra),
+            len(edges_rowwise),
             batch_size,
             total_chunks,
         )
@@ -347,8 +426,8 @@ SET r.extra = extra
         for chunk_index, chunk in enumerate(self._chunked(plain_edges, batch_size), start=1):
             self._execute_load_from_rows(chunk, _EDGE_COLUMNS, cypher_body)
             logger.debug("Записан чанк рёбер %s/%s", chunk_index, total_chunks)
-        if edges_with_extra:
-            self._flush_edges_with_extra(edges_with_extra)
+        if edges_rowwise:
+            self._flush_edges_with_extra(edges_rowwise)
 
     @staticmethod
     def _format_node_row(row: List) -> Dict:
@@ -367,6 +446,8 @@ SET r.extra = extra
         limit: int = 100
     ) -> List[Dict]:
         """Что зависит от объекта X (кто на него ссылается)."""
+        if self._unavailable:
+            return []
         limit = min(max(1, limit), 500)
         conn = self._get_conn()
         result = conn.execute(
@@ -383,6 +464,8 @@ SET r.extra = extra
 
     def get_references(self, object_name: str, limit: int = 100) -> List[Dict]:
         """На что ссылается объект X (какие объекты он использует)."""
+        if self._unavailable:
+            return []
         limit = min(max(1, limit), 500)
         conn = self._get_conn()
         result = conn.execute(
@@ -406,6 +489,8 @@ SET r.extra = extra
 
     def get_stats(self) -> Dict:
         """Статистика графа"""
+        if self._unavailable:
+            return dict(_EMPTY_STATS)
         conn = self._get_conn()
 
         by_type: Dict[str, int] = {}

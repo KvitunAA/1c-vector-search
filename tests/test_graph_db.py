@@ -371,6 +371,93 @@ class TestAddEdgesBatch:
         assert extra["context"] == "batch"
 
 
+class TestCsvUnsafeRowsGoRowwise:
+    """Kuzu LOAD FROM ломается на запятых и кавычках — такие строки пишутся MERGE поштучно."""
+
+    def test_role_synonym_with_commas(self, graph):
+        synonym = "Роль на чтение, в базе, документов"
+        graph.add_nodes_batch(
+            [
+                {
+                    "node_id": "metadata:Roles:ЧтениеДокументов",
+                    "node_type": "Metadata",
+                    "name": "ЧтениеДокументов",
+                    "object_type": "Roles",
+                    "object_name": "ЧтениеДокументов",
+                    "synonym": synonym,
+                },
+                {
+                    "node_id": "metadata:Catalogs:Номенклатура",
+                    "node_type": "Metadata",
+                    "name": "Номенклатура",
+                    "object_type": "Catalogs",
+                    "object_name": "Номенклатура",
+                    "synonym": "Товары",
+                },
+            ]
+        )
+        assert _node_field(graph, "metadata:Roles:ЧтениеДокументов", "synonym") == synonym
+        assert _node_field(graph, "metadata:Catalogs:Номенклатура", "synonym") == "Товары"
+        assert graph.get_stats()["nodes_count"] == 2
+
+    def test_quoted_name_and_extra_still_work(self, graph):
+        graph.add_nodes_batch(
+            [
+                {
+                    "node_id": "n1",
+                    "node_type": "Metadata",
+                    "name": 'Роль "Базовые права"',
+                    "synonym": 'Чтение, запись',
+                    "extra": {"rights": ["Read", "View"]},
+                }
+            ]
+        )
+        assert _node_field(graph, "n1", "name") == 'Роль "Базовые права"'
+        assert _node_field(graph, "n1", "synonym") == "Чтение, запись"
+        extra = json.loads(_node_field(graph, "n1", "extra"))
+        assert extra["rights"] == ["Read", "View"]
+
+    def test_row_needs_rowwise_detects_comma_and_quote(self):
+        assert GraphDBManager._row_needs_rowwise({"synonym": "Роль на чтение, в базе"})
+        assert GraphDBManager._row_needs_rowwise({"name": 'Роль "Чтение"'})
+        assert not GraphDBManager._row_needs_rowwise(
+            {"id": "n1", "name": "Номенклатура", "synonym": "Товары", "extra": ""}
+        )
+
+
+class TestGraphLockAndReadOnly:
+    """Lock graph.db и read-only для MCP."""
+
+    def test_second_writer_reports_lock(self, graph_db_path):
+        first = GraphDBManager(db_path=graph_db_path, lock_retries=1)
+        try:
+            with pytest.raises(RuntimeError, match="файл занят"):
+                GraphDBManager(db_path=graph_db_path, lock_retries=1)
+        finally:
+            first.close()
+
+    def test_read_only_after_writer_closed(self, graph_db_path):
+        writer = GraphDBManager(db_path=graph_db_path)
+        writer.add_node("n1", "Metadata", "A")
+        writer.close()
+        reader = GraphDBManager(db_path=graph_db_path, read_only=True, lock_retries=1)
+        try:
+            assert reader.get_stats()["nodes_count"] == 1
+        finally:
+            reader.close()
+
+    def test_read_only_missing_db_empty_stats(self, tmp_path):
+        missing = str(tmp_path / "no_graph.db")
+        reader = GraphDBManager(db_path=missing, read_only=True, lock_retries=1)
+        try:
+            stats = reader.get_stats()
+            assert stats["nodes_count"] == 0
+            assert reader.get_dependencies("X") == []
+            assert reader.get_references("X") == []
+        finally:
+            reader.close()
+
+
 class TestBatchIntegration:
     """Смешанный сценарий batch + запросы графа."""
 
