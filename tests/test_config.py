@@ -106,6 +106,8 @@ class TestConfigCollections:
         from config import Config
         assert Config.METADATA_TYPES["Справочник"] == "Catalogs"
         assert Config.METADATA_TYPES["Документ"] == "Documents"
+        assert Config.METADATA_TYPES["Роль"] == "Roles"
+        assert Config.METADATA_TYPES["МакетСКД"] == "Templates"
 
 
 class TestConfigChunking:

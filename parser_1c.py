@@ -148,6 +148,7 @@ class BSLParser:
         "ОбщиеМодули": "CommonModules",
         "Обработки": "DataProcessors",
         "Отчеты": "Reports",
+        "Роли": "Roles",
     }
 
     METADATA_COLLECTION_MAP_CF = {
@@ -161,7 +162,7 @@ class BSLParser:
         pattern = re.compile(
             r"\b(Документы|Справочники|РегистрыСведений|РегистрыНакопления|"
             r"РегистрыБухгалтерии|ПланыСчетов|Перечисления|ОбщиеМодули|"
-            r"Обработки|Отчеты)\.(\w+)",
+            r"Обработки|Отчеты|Роли)\.(\w+)",
             re.IGNORECASE,
         )
         seen = set()
@@ -201,6 +202,85 @@ class MetadataParser:
     """Парсер XML метаданных 1С"""
 
     NS = {'v8': 'http://v8.1c.ru/8.3/MDClasses'}
+
+    TEMPLATE_KIND_LABELS = {
+        "DataCompositionSchema": "Макет СКД (схема компоновки данных)",
+        "SpreadsheetDocument": "Табличный документ (MXL, печатная форма)",
+        "HTMLDocument": "HTML-документ",
+        "TextDocument": "Текстовый документ",
+        "BinaryData": "Двоичные данные",
+        "ActiveDocument": "ActiveDocument",
+        "GeographicalSchema": "Географическая схема",
+        "GraphicalSchema": "Графическая схема",
+        "Template": "Макет",
+    }
+
+    RIGHTS_TYPE_MAP = {
+        "Catalog": "Catalogs",
+        "CatalogObject": "Catalogs",
+        "Document": "Documents",
+        "DocumentObject": "Documents",
+        "InformationRegister": "InformationRegisters",
+        "AccumulationRegister": "AccumulationRegisters",
+        "AccountingRegister": "AccountingRegisters",
+        "DataProcessor": "DataProcessors",
+        "Report": "Reports",
+        "CommonModule": "CommonModules",
+        "Enum": "Enums",
+        "ChartOfAccounts": "ChartsOfAccounts",
+        "ChartOfCharacteristicTypes": "ChartsOfCharacteristicTypes",
+        "BusinessProcess": "BusinessProcesses",
+        "Task": "Tasks",
+        "ExchangePlan": "ExchangePlans",
+        "Constant": "Constants",
+        "FilterCriterion": "FilterCriteria",
+        "HTTPService": "HTTPServices",
+        "WebService": "WebServices",
+        "CommonForm": "CommonForms",
+        "CommonCommand": "CommonCommands",
+        "Subsystem": "Subsystems",
+    }
+
+    @staticmethod
+    def _local_name(tag: str) -> str:
+        return tag.split("}")[-1] if tag else ""
+
+    @classmethod
+    def _synonym_text(cls, synonym_elem) -> str:
+        if synonym_elem is None:
+            return ""
+        for child in synonym_elem.iter():
+            local = cls._local_name(child.tag)
+            if local in ("content", "presentation") and child.text and child.text.strip():
+                return child.text.strip()
+        return (synonym_elem.text or "").strip()
+
+    @classmethod
+    def _properties_fields(cls, root) -> Tuple[str, str, str]:
+        """Имя, синоним, комментарий из Properties (выгрузка конфигуратора) или v8:name."""
+        name, synonym, comment = "", "", ""
+        for elem in root.iter():
+            if cls._local_name(elem.tag) != "Properties":
+                continue
+            for child in list(elem):
+                local = cls._local_name(child.tag)
+                if local == "Name" and child.text and child.text.strip():
+                    name = child.text.strip()
+                elif local == "Comment" and child.text and child.text.strip():
+                    comment = child.text.strip()
+                elif local == "Synonym":
+                    synonym = cls._synonym_text(child)
+            if name:
+                break
+        if not name:
+            name_elem = root.find(".//v8:name", cls.NS)
+            if name_elem is not None and name_elem.text:
+                name = name_elem.text.strip()
+        if not synonym:
+            synonym_elem = root.find(".//v8:synonym", cls.NS)
+            if synonym_elem is not None:
+                synonym = cls._synonym_text(synonym_elem)
+        return name, synonym, comment
 
     @staticmethod
     def parse_object_metadata(xml_path: Path) -> Optional[Dict]:
@@ -367,6 +447,301 @@ class MetadataParser:
             logger.error(f"Ошибка парсинга формы {xml_path}: {e}")
             return None
 
+    @classmethod
+    def parse_rights_xml(cls, xml_path: Path) -> List[Dict]:
+        """Разбор Ext/Rights.xml: объекты и выданные права (value=true)."""
+        if not xml_path.exists():
+            return []
+        try:
+            root = ET.parse(xml_path).getroot()
+        except Exception as e:
+            logger.error("Ошибка парсинга прав %s: %s", xml_path, e)
+            return []
+
+        granted = []
+        for obj_elem in root.iter():
+            if cls._local_name(obj_elem.tag).lower() != "object":
+                continue
+            object_name = ""
+            rights = []
+            for child in list(obj_elem):
+                local = cls._local_name(child.tag).lower()
+                if local == "name" and child.text:
+                    object_name = child.text.strip()
+                elif local == "right":
+                    right_name, allowed = "", False
+                    for right_child in list(child):
+                        rlocal = cls._local_name(right_child.tag).lower()
+                        if rlocal == "name" and right_child.text:
+                            right_name = right_child.text.strip()
+                        elif rlocal == "value" and right_child.text:
+                            allowed = right_child.text.strip().lower() in ("true", "1", "истина")
+                    if right_name and allowed:
+                        rights.append(right_name)
+            if object_name and rights:
+                granted.append({"name": object_name, "rights": rights})
+        return granted
+
+    @classmethod
+    def parse_role_metadata(cls, xml_path: Path, rights_path: Optional[Path] = None) -> Optional[Dict]:
+        """Роль или шаблон прав: свойства + список выданных прав."""
+        try:
+            root = ET.parse(xml_path).getroot()
+        except Exception as e:
+            logger.error("Ошибка парсинга роли %s: %s", xml_path, e)
+            return None
+
+        name, synonym, comment = cls._properties_fields(root)
+        if not name:
+            name = xml_path.stem
+        granted = cls.parse_rights_xml(rights_path) if rights_path else []
+        return {
+            "name": name,
+            "type": cls._local_name(root.tag) or "Role",
+            "synonym": synonym,
+            "comment": comment,
+            "file_path": str(xml_path),
+            "granted_objects": granted,
+            "granted_count": len(granted),
+            "attributes": [],
+            "attributes_count": 0,
+            "tabular_sections": [],
+            "has_modules": [],
+        }
+
+    @classmethod
+    def _empty_template_record(cls, xml_path: Path, kind: str) -> Dict:
+        name = xml_path.parent.parent.name if xml_path.parent.name == "Ext" else xml_path.stem
+        return {
+            "name": name,
+            "type": kind,
+            "synonym": "",
+            "comment": "",
+            "file_path": str(xml_path),
+            "kind": kind,
+            "queries": [],
+            "data_sets": [],
+            "fields": [],
+            "parameters": [],
+            "named_areas": [],
+            "cell_texts": [],
+            "body_text": "",
+            "attributes": [],
+            "attributes_count": 0,
+            "tabular_sections": [],
+            "has_modules": [],
+        }
+
+    @classmethod
+    def _unique_texts(cls, values: List[str], limit: int) -> List[str]:
+        seen = []
+        for raw in values:
+            text = " ".join((raw or "").split())
+            if len(text) < 2:
+                continue
+            if text in seen:
+                continue
+            seen.append(text)
+            if len(seen) >= limit:
+                break
+        return seen
+
+    @classmethod
+    def _extract_spreadsheet(cls, root) -> Tuple[List[str], List[str], List[str]]:
+        cell_texts = []
+        parameters = []
+        named_areas = []
+        for elem in root.iter():
+            local = cls._local_name(elem.tag)
+            lower = local.lower()
+            text = (elem.text or "").strip()
+            if lower in ("content", "presentation") and text:
+                cell_texts.append(text)
+            elif lower == "parameter" and text and "\n" not in text and len(text) < 200:
+                parameters.append(text)
+            elif lower in ("nameditem", "nameditemcells"):
+                for child in list(elem):
+                    if cls._local_name(child.tag).lower() == "name" and child.text:
+                        named_areas.append(child.text.strip())
+        return cell_texts, parameters, named_areas
+
+    @classmethod
+    def _extract_plain_xml_text(cls, root) -> str:
+        chunks = []
+        for elem in root.iter():
+            text = (elem.text or "").strip()
+            if len(text) >= 2:
+                chunks.append(text)
+        return "\n".join(cls._unique_texts(chunks, 400))
+
+    @classmethod
+    def _strip_html(cls, html: str) -> str:
+        without_tags = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", html)
+        without_tags = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", without_tags)
+        without_tags = re.sub(r"(?s)<[^>]+>", " ", without_tags)
+        return " ".join(without_tags.split())
+
+    @classmethod
+    def _detect_template_kind(cls, head: str, root_tag: str, declared: str = "") -> str:
+        declared_cf = (declared or "").replace(" ", "")
+        for key in cls.TEMPLATE_KIND_LABELS:
+            if declared_cf.lower() == key.lower():
+                return key
+        head_l = head.lower()
+        root_l = root_tag.lower()
+        if "datacompositionschema" in head_l or "data-composition-system" in head_l:
+            return "DataCompositionSchema"
+        if "spreadsheet" in head_l or root_l == "document":
+            return "SpreadsheetDocument"
+        if "<html" in head_l or "textdocument" in head_l and "<html" in head_l:
+            return "HTMLDocument"
+        if "htmldocument" in head_l or "text/html" in head_l:
+            return "HTMLDocument"
+        if "geographicalschema" in head_l:
+            return "GeographicalSchema"
+        if "graphicalschema" in head_l:
+            return "GraphicalSchema"
+        if "activedocument" in head_l:
+            return "ActiveDocument"
+        return "Template"
+
+    @classmethod
+    def read_template_descriptor(cls, template_dir: Path) -> Dict[str, str]:
+        """Properties из Templates/Имя.xml рядом с Ext/Template.xml."""
+        candidates = [
+            template_dir.parent / f"{template_dir.name}.xml",
+            template_dir / f"{template_dir.name}.xml",
+        ]
+        for xml_path in candidates:
+            if not xml_path.exists():
+                continue
+            try:
+                root = ET.parse(xml_path).getroot()
+            except Exception:
+                continue
+            name, synonym, comment = cls._properties_fields(root)
+            template_type = ""
+            for elem in root.iter():
+                if cls._local_name(elem.tag) == "TemplateType" and elem.text:
+                    template_type = elem.text.strip()
+                    break
+            return {
+                "name": name,
+                "synonym": synonym,
+                "comment": comment,
+                "template_type": template_type,
+                "descriptor_path": str(xml_path),
+            }
+        return {}
+
+    @classmethod
+    def parse_dcs_template(cls, xml_path: Path) -> Optional[Dict]:
+        """Обратная совместимость: только СКД, иначе None."""
+        parsed = cls.parse_template_file(xml_path)
+        if not parsed or parsed.get("kind") != "DataCompositionSchema":
+            return None
+        return parsed
+
+    @classmethod
+    def parse_template_file(cls, xml_path: Path, declared_type: str = "") -> Optional[Dict]:
+        """Любой макет из Ext/Template.xml: СКД, MXL, HTML, текст."""
+        try:
+            head = xml_path.read_text(encoding="utf-8-sig", errors="ignore")
+        except Exception as e:
+            logger.error("Ошибка чтения макета %s: %s", xml_path, e)
+            return None
+        if not head.strip():
+            return None
+
+        kind = cls._detect_template_kind(head[:8000], "", declared_type)
+        if kind == "DataCompositionSchema" or (
+            "DataCompositionSchema" in head[:4000] or "data-composition-system" in head[:4000]
+        ):
+            try:
+                root = ET.parse(xml_path).getroot()
+            except Exception as e:
+                logger.error("Ошибка парсинга макета СКД %s: %s", xml_path, e)
+                return None
+            record = cls._empty_template_record(xml_path, "DataCompositionSchema")
+            queries, data_sets, fields, parameters = [], [], [], []
+            for elem in root.iter():
+                local = cls._local_name(elem.tag)
+                lower = local.lower()
+                text = (elem.text or "").strip()
+                if lower == "query" and text:
+                    queries.append(text)
+                elif lower == "dataset":
+                    ds_name = ""
+                    for child in list(elem):
+                        if cls._local_name(child.tag).lower() == "name" and child.text:
+                            ds_name = child.text.strip()
+                            break
+                    if ds_name:
+                        data_sets.append(ds_name)
+                elif lower == "field" or local.endswith("Field"):
+                    for child in list(elem):
+                        child_local = cls._local_name(child.tag).lower()
+                        if child_local in ("datapath", "name") and child.text and child.text.strip():
+                            fields.append(child.text.strip())
+                elif lower == "parameter" or local.endswith("Parameter"):
+                    for child in list(elem):
+                        if cls._local_name(child.tag).lower() == "name" and child.text and child.text.strip():
+                            parameters.append(child.text.strip())
+            record["queries"] = queries
+            record["data_sets"] = list(dict.fromkeys(data_sets))
+            record["fields"] = list(dict.fromkeys(fields))[:80]
+            record["parameters"] = list(dict.fromkeys(parameters))[:40]
+            return record
+
+        try:
+            root = ET.parse(xml_path).getroot()
+            root_tag = cls._local_name(root.tag)
+        except Exception:
+            if "<html" in head.lower():
+                record = cls._empty_template_record(xml_path, "HTMLDocument")
+                record["body_text"] = cls._strip_html(head)[:8000]
+                return record
+            record = cls._empty_template_record(xml_path, declared_type or "TextDocument")
+            record["body_text"] = head[:8000]
+            return record
+
+        kind = cls._detect_template_kind(head[:8000], root_tag, declared_type)
+        record = cls._empty_template_record(xml_path, kind)
+
+        if kind == "SpreadsheetDocument":
+            cell_texts, parameters, named_areas = cls._extract_spreadsheet(root)
+            record["cell_texts"] = cls._unique_texts(cell_texts, 250)
+            record["parameters"] = cls._unique_texts(parameters, 80)
+            record["named_areas"] = cls._unique_texts(named_areas, 60)
+            return record
+
+        if kind == "HTMLDocument":
+            record["body_text"] = cls._strip_html(head)[:8000]
+            return record
+
+        record["body_text"] = cls._extract_plain_xml_text(root)[:8000]
+        return record
+
+    @classmethod
+    def parse_binary_template(cls, bin_path: Path, declared_type: str = "") -> Dict:
+        """Макет только как Template.bin (без XML содержимого)."""
+        record = cls._empty_template_record(bin_path, declared_type or "BinaryData")
+        record["kind"] = declared_type or "BinaryData"
+        record["type"] = record["kind"]
+        return record
+
+    @classmethod
+    def rights_target(cls, object_ref: str) -> Optional[Tuple[str, str]]:
+        """Catalog.Номенклатура -> (Catalogs, Номенклатура)."""
+        if not object_ref or "." not in object_ref:
+            return None
+        type_key, obj_name = object_ref.split(".", 1)
+        obj_name = obj_name.split(".")[0]
+        mapped = cls.RIGHTS_TYPE_MAP.get(type_key)
+        if not mapped or not obj_name:
+            return None
+        return mapped, obj_name
+
 
 class ConfigurationScanner:
     """Сканер структуры конфигурации 1С"""
@@ -375,6 +750,17 @@ class ConfigurationScanner:
         self.config_path = Path(config_path)
         self.bsl_parser = BSLParser()
         self.metadata_parser = MetadataParser()
+
+    def list_module_files(self) -> List[Tuple[Path, str]]:
+        """Список BSL-файлов без парсинга (для параллельной обработки в индексаторе графа)."""
+        results = []
+        for bsl_file in self.config_path.rglob("*.bsl"):
+            relative_path = bsl_file.relative_to(self.config_path)
+            parts = relative_path.parts
+            object_type = parts[0] if len(parts) > 0 else "Unknown"
+            object_name = parts[1] if len(parts) > 1 else bsl_file.stem
+            results.append((bsl_file, f"{object_type}.{object_name}"))
+        return results
 
     def scan_all_modules(self) -> List[Tuple[Path, str, List[Dict]]]:
         """Сканирование всех BSL модулей в конфигурации"""
@@ -388,7 +774,7 @@ class ConfigurationScanner:
                 methods = self.bsl_parser.parse_module(bsl_file)
                 if methods:
                     results.append((bsl_file, f"{object_type}.{object_name}", methods))
-                    logger.info(f"Найдено {len(methods)} методов в {relative_path}")
+                    logger.debug("Найдено %s методов в %s", len(methods), relative_path)
             except Exception as e:
                 logger.error(
                     "Ошибка при сканировании модуля %s: %s",
@@ -396,6 +782,7 @@ class ConfigurationScanner:
                     e,
                     exc_info=True,
                 )
+        logger.info("Сканирование модулей завершено: %s файлов с методами", len(results))
         return results
 
     def scan_all_metadata(self) -> List[Dict]:
@@ -439,7 +826,141 @@ class ConfigurationScanner:
                         results.append(metadata)
                         logger.info(f"Извлечены метаданные: {metadata['name']} ({dir_name})")
 
+        results.extend(self.scan_all_roles("Roles"))
+        results.extend(self.scan_all_roles("RoleTemplates"))
+        results.extend(self.scan_all_templates())
+        logger.info("Сканирование метаданных завершено: %s объектов", len(results))
         return results
+
+    def _iter_named_xml(self, dir_name: str):
+        dir_path = self.config_path / dir_name
+        if not dir_path.exists():
+            return
+        seen = set()
+        for xml_file in dir_path.glob("*.xml"):
+            if xml_file.stem not in seen:
+                seen.add(xml_file.stem)
+                yield xml_file, xml_file.stem
+        for xml_file in dir_path.glob("*/*.xml"):
+            if xml_file.parent.name != xml_file.stem:
+                continue
+            if xml_file.stem in seen:
+                continue
+            seen.add(xml_file.stem)
+            yield xml_file, xml_file.stem
+
+    def scan_all_roles(self, directory: str = "Roles") -> List[Dict]:
+        """Роли или шаблоны прав (RoleTemplates)."""
+        results = []
+        kind = "RoleTemplate" if directory == "RoleTemplates" else "Role"
+        for xml_file, stem in self._iter_named_xml(directory):
+            if xml_file.parent.name == stem:
+                rights_path = xml_file.parent / "Ext" / "Rights.xml"
+            else:
+                rights_path = xml_file.parent / stem / "Ext" / "Rights.xml"
+            parsed = self.metadata_parser.parse_role_metadata(xml_file, rights_path)
+            if not parsed:
+                continue
+            parsed["object_type_dir"] = directory
+            parsed["kind"] = kind
+            parsed["type"] = kind
+            results.append(parsed)
+            logger.debug(
+                "Роль/шаблон: %s (%s), объектов прав: %s",
+                parsed["name"],
+                directory,
+                parsed.get("granted_count", 0),
+            )
+        logger.info("Сканирование %s: %s объектов", directory, len(results))
+        return results
+
+    def _annotate_template(self, parsed: Dict, content_path: Path) -> Optional[Dict]:
+        try:
+            relative = content_path.relative_to(self.config_path)
+        except ValueError:
+            return None
+        parts = relative.parts
+        template_name = parsed.get("name") or content_path.parent.parent.name
+        owner_type, owner_name = "Unknown", ""
+        if parts and parts[0] == "CommonTemplates" and len(parts) >= 2:
+            owner_type = "CommonTemplates"
+            owner_name = parts[1]
+            template_name = parts[1]
+        elif "Templates" in parts:
+            idx = parts.index("Templates")
+            owner_type = parts[0] if parts else "Unknown"
+            owner_name = parts[1] if len(parts) > 1 else ""
+            if idx + 1 < len(parts):
+                template_name = parts[idx + 1]
+        if owner_type == "CommonTemplates":
+            unique_name = f"CommonTemplates.{template_name}"
+        else:
+            unique_name = f"{owner_type}.{owner_name}.{template_name}"
+
+        template_dir = content_path.parent.parent if content_path.parent.name == "Ext" else content_path.parent
+        descriptor = self.metadata_parser.read_template_descriptor(template_dir)
+        if descriptor.get("template_type") and parsed.get("kind") in ("Template", "BinaryData", ""):
+            parsed["kind"] = descriptor["template_type"]
+            parsed["type"] = descriptor["template_type"]
+        if descriptor.get("synonym"):
+            parsed["synonym"] = descriptor["synonym"]
+        elif not parsed.get("synonym"):
+            parsed["synonym"] = template_name
+        if descriptor.get("comment"):
+            parsed["comment"] = descriptor["comment"]
+        if descriptor.get("name"):
+            template_name = descriptor["name"]
+            if owner_type == "CommonTemplates":
+                unique_name = f"CommonTemplates.{template_name}"
+            else:
+                unique_name = f"{owner_type}.{owner_name}.{template_name}"
+
+        parsed["name"] = unique_name
+        parsed["template_name"] = template_name
+        parsed["owner_type"] = owner_type
+        parsed["owner_name"] = owner_name
+        parsed["object_type_dir"] = "Templates"
+        parsed["kind"] = parsed.get("kind") or "Template"
+        parsed["type"] = parsed.get("type") or parsed["kind"]
+        return parsed
+
+    def scan_all_templates(self) -> List[Dict]:
+        """Все макеты: СКД, MXL, HTML, текст, двоичные (Template.xml / Template.bin)."""
+        results = []
+        seen = set()
+        for xml_file in self.config_path.rglob("Ext/Template.xml"):
+            descriptor_dir = xml_file.parent.parent
+            declared = self.metadata_parser.read_template_descriptor(descriptor_dir).get("template_type", "")
+            parsed = self.metadata_parser.parse_template_file(xml_file, declared)
+            if not parsed:
+                continue
+            annotated = self._annotate_template(parsed, xml_file)
+            if not annotated or annotated["name"] in seen:
+                continue
+            seen.add(annotated["name"])
+            results.append(annotated)
+            logger.debug("Макет %s: %s", annotated.get("kind"), annotated["name"])
+
+        for bin_file in self.config_path.rglob("Ext/Template.bin"):
+            xml_sibling = bin_file.with_suffix(".xml")
+            if xml_sibling.exists():
+                continue
+            descriptor_dir = bin_file.parent.parent
+            declared = self.metadata_parser.read_template_descriptor(descriptor_dir).get("template_type", "")
+            parsed = self.metadata_parser.parse_binary_template(bin_file, declared)
+            annotated = self._annotate_template(parsed, bin_file)
+            if not annotated or annotated["name"] in seen:
+                continue
+            seen.add(annotated["name"])
+            results.append(annotated)
+            logger.debug("Макет (bin) %s: %s", annotated.get("kind"), annotated["name"])
+
+        logger.info("Сканирование макетов: %s", len(results))
+        return results
+
+    def scan_all_dcs_templates(self) -> List[Dict]:
+        """Обратная совместимость: все макеты, не только СКД."""
+        return self.scan_all_templates()
 
     def scan_all_forms(self) -> List[Dict]:
         """Сканирование всех форм."""

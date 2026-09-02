@@ -8,6 +8,7 @@ env/
 venv/
 ENV/
 .venv
+.tools/
 
 # Векторная БД
 vectordb/

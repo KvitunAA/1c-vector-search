@@ -40,7 +40,10 @@ def main() -> None:
         )
         sys.exit(1)
 
-    workers = os.getenv("INDEX_GRAPH_WORKERS", "8").strip() or "8"
+    workers_env = os.getenv("INDEX_GRAPH_WORKERS", "").strip()
+    graph_args = ["--clear"]
+    if workers_env:
+        graph_args.extend(["--workers", workers_env])
 
     _run(
         "[1/4] Основная конфигурация — векторная БД (sqlite-vec)",
@@ -50,7 +53,7 @@ def main() -> None:
     _run(
         "[2/4] Основная конфигурация — граф зависимостей",
         "index_graph_mp.py",
-        ["--clear", "--workers", workers],
+        graph_args,
     )
 
     sys.path.insert(0, str(_project_root()))
@@ -76,10 +79,13 @@ def main() -> None:
         "run_indexer.py",
         ["--extension", "--clear", "--vector-only"],
     )
+    ext_graph_args = ["--extension", "--clear"]
+    if workers_env:
+        ext_graph_args.extend(["--workers", workers_env])
     _run(
         "[4/4] Расширение — граф зависимостей",
         "index_graph_mp.py",
-        ["--extension", "--clear", "--workers", workers],
+        ext_graph_args,
     )
     print()
     print("Готово: основная конфигурация и расширение проиндексированы.")

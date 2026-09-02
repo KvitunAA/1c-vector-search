@@ -199,12 +199,16 @@ class Config:
         "Отчет": "Reports",
         "ОбщийМодуль": "CommonModules",
         "Перечисление": "Enums",
-        "ПланСчетов": "ChartsOfAccounts"
+        "ПланСчетов": "ChartsOfAccounts",
+        "Роль": "Roles",
+        "ШаблонПрав": "RoleTemplates",
+        "МакетСКД": "Templates",
     }
 
     BATCH_SIZE_CODE = int(os.getenv("BATCH_SIZE_CODE", "100"))
     BATCH_SIZE_METADATA = int(os.getenv("BATCH_SIZE_METADATA", "50"))
     BATCH_SIZE_FORMS = int(os.getenv("BATCH_SIZE_FORMS", "50"))
+    GRAPH_WRITE_BATCH_SIZE = int(os.getenv("GRAPH_WRITE_BATCH_SIZE", "5000"))
 
     DEFAULT_SEARCH_LIMIT = int(os.getenv("DEFAULT_SEARCH_LIMIT", "5"))
     MAX_SEARCH_LIMIT = int(os.getenv("MAX_SEARCH_LIMIT", "20"))

@@ -25,7 +25,11 @@ set "CACHE_OPT="
 if defined CLEAR_GRAPH set "CLEAR_OPT=--clear"
 if defined NO_CACHE set "CACHE_OPT=--no-cache"
 
-REM Запуск индексатора (многопроцессорный)
-"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" --workers 8 %CLEAR_OPT% %CACHE_OPT%
+REM Запуск индексатора (многопроцессорный, workers = cpu_count - 1 по умолчанию)
+REM Опционально: set INDEX_GRAPH_WORKERS=12
+set "WORKERS_OPT="
+if defined INDEX_GRAPH_WORKERS set "WORKERS_OPT=--workers %INDEX_GRAPH_WORKERS%"
+
+"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" %WORKERS_OPT% %CLEAR_OPT% %CACHE_OPT%
 
 pause

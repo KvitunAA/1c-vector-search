@@ -1,5 +1,6 @@
 # MCP Server для работы с конфигурацией 1С через векторную БД
-# Требуется Python 3.10+
+# Требуется Python 3.10–3.13 (kuzu: wheel для Windows; Python 3.14 не поддерживается).
+# Первый запуск на машине: powershell -ExecutionPolicy Bypass -File scripts\bootstrap_python.ps1
 
 # MCP SDK
 mcp>=0.9.0

@@ -346,6 +346,61 @@ class VectorDBManager:
             text_parts.append(f"Табличные части: {'; '.join(ts_parts)}")
         if obj.get('commands'):
             text_parts.append(f"Команды: {', '.join(obj['commands'])}")
+        if obj.get("kind") in ("Role", "RoleTemplate") or obj.get("granted_objects"):
+            kind_label = "Шаблон прав" if obj.get("kind") == "RoleTemplate" else "Роль"
+            text_parts.append(kind_label)
+            granted = obj.get("granted_objects") or []
+            text_parts.append(f"Объектов с правами: {len(granted)}")
+            snippets = []
+            for item in granted[:80]:
+                rights = ", ".join(item.get("rights") or [])
+                snippets.append(f"{item.get('name', '')} ({rights})" if rights else item.get("name", ""))
+            if snippets:
+                text_parts.append("Права: " + "; ".join(snippets))
+        kind = obj.get("kind") or ""
+        is_template = obj.get("object_type_dir") == "Templates" or kind in (
+            "DataCompositionSchema",
+            "SpreadsheetDocument",
+            "HTMLDocument",
+            "TextDocument",
+            "BinaryData",
+            "ActiveDocument",
+            "GeographicalSchema",
+            "GraphicalSchema",
+            "Template",
+        )
+        if is_template or obj.get("queries") or obj.get("cell_texts") or obj.get("body_text"):
+            labels = {
+                "DataCompositionSchema": "Макет СКД (схема компоновки данных)",
+                "SpreadsheetDocument": "Табличный документ (MXL, печатная форма)",
+                "HTMLDocument": "HTML-документ",
+                "TextDocument": "Текстовый документ",
+                "BinaryData": "Двоичные данные",
+                "ActiveDocument": "ActiveDocument",
+                "GeographicalSchema": "Географическая схема",
+                "GraphicalSchema": "Графическая схема",
+            }
+            text_parts.append(labels.get(kind, "Макет 1С"))
+            if obj.get("owner_type") or obj.get("owner_name"):
+                text_parts.append(
+                    f"Владелец: {obj.get('owner_type', '')} {obj.get('owner_name', '')}"
+                )
+            if obj.get("template_name"):
+                text_parts.append(f"Макет: {obj.get('template_name')}")
+            if obj.get("data_sets"):
+                text_parts.append("Наборы данных: " + ", ".join(obj["data_sets"][:30]))
+            if obj.get("parameters"):
+                text_parts.append("Параметры: " + ", ".join(obj["parameters"][:30]))
+            if obj.get("fields"):
+                text_parts.append("Поля: " + ", ".join(obj["fields"][:40]))
+            if obj.get("named_areas"):
+                text_parts.append("Области: " + ", ".join(obj["named_areas"][:40]))
+            if obj.get("cell_texts"):
+                text_parts.append("Текст ячеек: " + "; ".join(obj["cell_texts"][:80]))
+            if obj.get("body_text"):
+                text_parts.append(obj["body_text"])
+            for idx, query_text in enumerate(obj.get("queries") or [], start=1):
+                text_parts.append(f"Запрос {idx}: {query_text}")
         return "\n".join(text_parts)
 
     def add_metadata_objects(self, metadata_objects: List[Dict], batch_size: int = None):

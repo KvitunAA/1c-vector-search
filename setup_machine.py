@@ -105,6 +105,10 @@ def migrate_cmd_files(vector_root: Path) -> int:
 
 def detect_python() -> str:
     """Определяет путь к Python."""
+    local_tools = PROJECT_ROOT / ".tools" / "python312" / "python.exe"
+    if local_tools.exists():
+        return str(local_tools)
+
     try:
         import subprocess
         result = subprocess.run(

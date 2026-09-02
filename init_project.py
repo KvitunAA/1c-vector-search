@@ -190,7 +190,10 @@ if defined CLEAR_GRAPH set "CLEAR_OPT=--clear"
 set "CACHE_OPT="
 if defined NO_CACHE set "CACHE_OPT=--no-cache"
 
-"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" --extension --workers 8 %CLEAR_OPT% %CACHE_OPT%
+set "WORKERS_OPT="
+if defined INDEX_GRAPH_WORKERS set "WORKERS_OPT=--workers %INDEX_GRAPH_WORKERS%"
+
+"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" --extension %WORKERS_OPT% %CLEAR_OPT% %CACHE_OPT%
 
 pause
 ''',

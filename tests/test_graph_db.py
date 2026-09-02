@@ -228,3 +228,215 @@ class TestGetStats:
         assert stats["nodes_by_type"]["Metadata"] == 1
         assert stats["nodes_by_type"]["Method"] == 1
         assert stats["edges_by_type"]["HAS_METHOD"] == 1
+
+
+class TestAddNodesBatch:
+    """Пакетное добавление узлов."""
+
+    def test_empty_batch_noop(self, graph):
+        graph.add_nodes_batch([])
+        assert graph.get_stats()["nodes_count"] == 0
+
+    def test_batch_insert(self, graph):
+        graph.add_nodes_batch(
+            [
+                {
+                    "node_id": "metadata:Catalogs:Номенклатура",
+                    "node_type": "Metadata",
+                    "name": "Номенклатура",
+                    "object_type": "Catalogs",
+                    "object_name": "Номенклатура",
+                    "synonym": "Товары",
+                },
+                {
+                    "node_id": "method:Catalogs:Номенклатура:Module:Тест",
+                    "node_type": "Method",
+                    "name": "Тест",
+                    "object_type": "Catalogs",
+                    "object_name": "Номенклатура",
+                },
+            ]
+        )
+        stats = graph.get_stats()
+        assert stats["nodes_count"] == 2
+        assert _node_field(graph, "metadata:Catalogs:Номенклатура", "synonym") == "Товары"
+
+    def test_batch_upsert(self, graph):
+        graph.add_nodes_batch(
+            [{"node_id": "n1", "node_type": "Metadata", "name": "Old"}]
+        )
+        graph.add_nodes_batch(
+            [{"node_id": "n1", "node_type": "Metadata", "name": "New"}]
+        )
+        assert _node_field(graph, "n1", "name") == "New"
+        assert graph.get_stats()["nodes_count"] == 1
+
+    def test_batch_dedupe_by_id(self, graph):
+        graph.add_nodes_batch(
+            [
+                {"node_id": "n1", "node_type": "Metadata", "name": "First"},
+                {"node_id": "n1", "node_type": "Metadata", "name": "Second"},
+            ]
+        )
+        assert _node_field(graph, "n1", "name") == "Second"
+        assert graph.get_stats()["nodes_count"] == 1
+
+    def test_invalid_node_type_raises(self, graph):
+        with pytest.raises(ValueError, match="Неизвестный тип узла"):
+            graph.add_nodes_batch(
+                [{"node_id": "n1", "node_type": "InvalidType", "name": "X"}]
+            )
+
+
+class TestAddEdgesBatch:
+    """Пакетное добавление рёбер."""
+
+    def test_empty_batch_noop(self, graph):
+        graph.add_nodes_batch([{"node_id": "n1", "node_type": "Metadata", "name": "A"}])
+        graph.add_edges_batch([])
+        assert graph.get_stats()["edges_count"] == 0
+
+    def test_batch_insert(self, graph):
+        graph.add_nodes_batch(
+            [
+                {"node_id": "s1", "node_type": "Metadata", "name": "Source"},
+                {"node_id": "t1", "node_type": "Metadata", "name": "Target"},
+            ]
+        )
+        graph.add_edges_batch(
+            [{"source": "s1", "target": "t1", "edge_type": "REFERENCES"}]
+        )
+        assert graph.get_stats()["edges_count"] == 1
+
+    def test_batch_dedupe_same_type(self, graph):
+        graph.add_nodes_batch(
+            [
+                {"node_id": "s1", "node_type": "Metadata", "name": "Source"},
+                {"node_id": "t1", "node_type": "Metadata", "name": "Target"},
+            ]
+        )
+        graph.add_edges_batch(
+            [
+                {"source": "s1", "target": "t1", "edge_type": "REFERENCES"},
+                {"source": "s1", "target": "t1", "edge_type": "REFERENCES"},
+            ]
+        )
+        assert graph.get_stats()["edges_count"] == 1
+
+    def test_batch_different_edge_types(self, graph):
+        graph.add_nodes_batch(
+            [
+                {"node_id": "s1", "node_type": "Metadata", "name": "Source"},
+                {"node_id": "t1", "node_type": "Metadata", "name": "Target"},
+            ]
+        )
+        graph.add_edges_batch(
+            [
+                {"source": "s1", "target": "t1", "edge_type": "REFERENCES"},
+                {"source": "s1", "target": "t1", "edge_type": "HAS_METHOD"},
+            ]
+        )
+        assert graph.get_stats()["edges_count"] == 2
+
+    def test_invalid_edge_type_raises(self, graph):
+        graph.add_nodes_batch(
+            [
+                {"node_id": "s1", "node_type": "Metadata", "name": "Source"},
+                {"node_id": "t1", "node_type": "Metadata", "name": "Target"},
+            ]
+        )
+        with pytest.raises(ValueError, match="Неизвестный тип ребра"):
+            graph.add_edges_batch(
+                [{"source": "s1", "target": "t1", "edge_type": "INVALID_EDGE"}]
+            )
+
+    def test_batch_with_extra(self, graph):
+        graph.add_nodes_batch(
+            [
+                {"node_id": "s1", "node_type": "Metadata", "name": "Source"},
+                {"node_id": "t1", "node_type": "Metadata", "name": "Target"},
+            ]
+        )
+        graph.add_edges_batch(
+            [
+                {
+                    "source": "s1",
+                    "target": "t1",
+                    "edge_type": "REFERENCES",
+                    "extra": {"context": "batch"},
+                }
+            ]
+        )
+        extra = json.loads(_edge_field(graph, "extra"))
+        assert extra["context"] == "batch"
+
+
+class TestBatchIntegration:
+    """Смешанный сценарий batch + запросы графа."""
+
+    def test_batch_nodes_edges_and_references(self, graph):
+        graph.add_nodes_batch(
+            [
+                {
+                    "node_id": "metadata:Documents:Заказ",
+                    "node_type": "Metadata",
+                    "name": "Заказ",
+                    "object_type": "Documents",
+                    "object_name": "Заказ",
+                },
+                {
+                    "node_id": "metadata:Catalogs:Номенклатура",
+                    "node_type": "Metadata",
+                    "name": "Номенклатура",
+                    "object_type": "Catalogs",
+                    "object_name": "Номенклатура",
+                },
+            ]
+        )
+        graph.add_edges_batch(
+            [
+                {
+                    "source": "metadata:Documents:Заказ",
+                    "target": "metadata:Catalogs:Номенклатура",
+                    "edge_type": "REFERENCES",
+                }
+            ]
+        )
+        refs = graph.get_references("Заказ")
+        assert len(refs) >= 1
+        assert any("Номенклатура" in item["object"] for item in refs)
+
+
+class TestNewEdgeTypes:
+    """Рёбра прав и макетов СКД."""
+
+    def test_has_right_and_has_template(self, graph):
+        graph.add_nodes_batch(
+            [
+                {"node_id": "metadata:Roles:Чтение", "node_type": "Metadata", "name": "Чтение"},
+                {"node_id": "metadata:Catalogs:Номенклатура", "node_type": "Metadata", "name": "Номенклатура"},
+                {"node_id": "metadata:Reports:Остатки", "node_type": "Metadata", "name": "Остатки"},
+                {
+                    "node_id": "metadata:Templates:Reports.Остатки.ОсновнаяСхема",
+                    "node_type": "Metadata",
+                    "name": "Reports.Остатки.ОсновнаяСхема",
+                },
+            ]
+        )
+        graph.add_edges_batch(
+            [
+                {
+                    "source": "metadata:Roles:Чтение",
+                    "target": "metadata:Catalogs:Номенклатура",
+                    "edge_type": "HAS_RIGHT",
+                },
+                {
+                    "source": "metadata:Reports:Остатки",
+                    "target": "metadata:Templates:Reports.Остатки.ОсновнаяСхема",
+                    "edge_type": "HAS_TEMPLATE",
+                },
+            ]
+        )
+        stats = graph.get_stats()
+        assert stats["edges_by_type"]["HAS_RIGHT"] == 1
+        assert stats["edges_by_type"]["HAS_TEMPLATE"] == 1
