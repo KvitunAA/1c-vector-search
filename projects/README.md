@@ -18,13 +18,17 @@
 | `run_index_vector_your_project.cmd` | Только векторная БД: код, метаданные, формы (без графа) |
 | `run_index_graph_your_project.cmd` | Только граф связей (без векторной БД) |
 
-## Создание нового проекта
+## Создание нового проекта (каждая конфигурация 1С — отдельный профиль и MCP)
 
 ```cmd
-python init_project.py -n my_project -c "D:\Path\To\1C\Config" --add-mcp --index -y
+python init_project.py -n tip_zup -c "D:\1C\ZUP" -m tip_zup -d "MCP: ЗУП" --add-mcp -y
+python init_project.py -n tip_erp -c "D:\1C\ERP" -m tip_erp -d "MCP: ERP" --add-mcp -y
+python scripts\sync_mcp_config.py --cursor
 ```
 
-Или скопируйте `your_project` и переименуйте, затем отредактируйте `.env`.
+В Cursor в чате выбирайте `@tip_zup`, `@tip_erp` и т.д. — один репозиторий, разные конфигурации.
+
+Или скопируйте `your_project` и переименуйте, затем отредактируйте `.env` (`MCP_SERVER_NAME`, `CONFIG_PATH`).
 
 ---
 

@@ -83,13 +83,25 @@ def _build_profile_server(profile_dir: Path) -> Optional[McpServer]:
         "VECTORDB_PATH": str(vectordb_dir),
         "GRAPHDB_PATH": str(profile_dir / "graphdb" / "graph.db"),
     }
+    if has_env:
+        try:
+            from mcp_profiles import _merge_profile_env
 
-    description = f"Профиль '{profile_name}' (текущий репозиторий)"
+            merged = _merge_profile_env(profile_dir)
+            if merged.get("MCP_SERVER_NAME"):
+                env["MCP_SERVER_NAME"] = merged["MCP_SERVER_NAME"]
+            if merged.get("CONFIG_DESCRIPTION"):
+                env["CONFIG_DESCRIPTION"] = merged["CONFIG_DESCRIPTION"]
+        except ImportError:
+            pass
+
+    display_name = env.get("MCP_SERVER_NAME", profile_name)
+    description = env.get("CONFIG_DESCRIPTION") or f"Профиль '{profile_name}' (текущий репозиторий)"
     if profile_name in _TEMPLATE_PROFILES and not has_index:
         description += " — шаблон, база ещё не проиндексирована"
 
     return McpServer(
-        name=profile_name,
+        name=display_name,
         description=description,
         command=sys.executable or "python",
         args=["run_server.py"],

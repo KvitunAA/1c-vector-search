@@ -1,42 +1,64 @@
-# Подключение your_project к MCP в Cursor
+# Подключение профилей к MCP в Cursor
 
-## Шаги настройки
+Один репозиторий **ProectVectorSearch** обслуживает **несколько конфигураций 1С** (ЗУП, ERP, КА, БУХ и др.). Для каждой конфигурации — отдельный профиль в `projects/<имя>/` и **отдельное имя MCP** в Cursor (как `tip` и `tip_zup`).
 
-1. **Переименуйте профиль** — замените `your_project` на имя вашего проекта (например, `Vector`).
-2. **Настройте `your_project.env`** — укажите `CONFIG_PATH` (путь к выгрузке конфигурации 1С) и параметры эмбеддингов. **При Qwen3 через LM Studio/GGUF** оставьте `EMBEDDING_ADD_EOS_MANUAL=false` (по умолчанию) — llama.cpp добавляет EOS автоматически (см. [MODEL_CONFIGURATION_RECOMMENDATIONS.md](MODEL_CONFIGURATION_RECOMMENDATIONS.md), раздел 5).
-3. **Переименуйте .cmd-скрипты** — `run_server_your_project.cmd` → `run_server_<имя>.cmd` и т.д., либо используйте `init_project.py` для создания нового проекта.
+## Быстрый старт: новая конфигурация
 
-## Подключение в Cursor
+```cmd
+python init_project.py -n tip_zup -c "D:\1C\ZUP\Config" -m tip_zup -d "MCP: ЗУП" --add-mcp -y
+python init_project.py -n tip_erp -c "D:\1C\ERP\Config" -m tip_erp -d "MCP: ERP" --add-mcp -y
+```
+
+После индексации синхронизируйте MCP:
+
+```cmd
+python scripts\sync_mcp_config.py --cursor
+```
+
+Или только `mcp_config.json` в корне репозитория:
+
+```cmd
+python scripts\sync_mcp_config.py
+```
+
+## Параметры профиля (.env)
+
+| Переменная | Назначение |
+|------------|------------|
+| `CONFIG_PATH` | Путь к выгрузке 1С |
+| `MCP_SERVER_NAME` | Имя MCP в Cursor (`tip_zup`, `tip_erp`, …) |
+| `CONFIG_DESCRIPTION` | Описание в mcp.json |
+
+## Подключение вручную (один профиль)
 
 `Ctrl+Shift+P` → **"MCP: Edit Config File"**
 
-В секцию `mcpServers` добавьте (замените `C:\project` на путь к папке проекта):
-
 ```json
-"1c-vector-search": {
+"tip_zup": {
   "command": "cmd",
-  "args": ["/c", "C:\\project\\run_server_your_project.cmd"],
+  "args": ["/c", "C:\\Cursor\\ProectVectorSearch\\run_server_tip_zup.cmd"],
   "env": {
-    "PROJECT_PROFILE": "your_project",
-    "VECTORDB_PATH": "C:\\project\\projects\\your_project\\vectordb",
-    "GRAPHDB_PATH": "C:\\project\\projects\\your_project\\graphdb\\graph.db"
+    "PROJECT_PROFILE": "tip_zup",
+    "VECTORDB_PATH": "C:\\Cursor\\ProectVectorSearch\\projects\\tip_zup\\vectordb",
+    "GRAPHDB_PATH": "C:\\Cursor\\ProectVectorSearch\\projects\\tip_zup\\graphdb\\graph.db"
   },
-  "description": "MCP сервер для семантического поиска по конфигурации 1С"
+  "description": "MCP: Зарплата и управление персоналом"
 }
 ```
+
+В чате Cursor выбирайте нужный сервер: `@tip_zup`, `@tip_erp` и т.д.
 
 ## Индексация
 
 ```cmd
-run_index_your_project.cmd
+run_index_tip_zup.cmd
+run_index_graph_tip_zup.cmd
 ```
 
-Для индексации только графа (без векторной БД):
+Для компактной сборки графа: `set STAGING=1` перед `run_index_graph_*.cmd`.
+
+## Список профилей
 
 ```cmd
-run_index_graph_your_project.cmd
+python scripts\sync_mcp_config.py --list
 ```
-
-## Использование
-
-Префикс @ при выборе MCP: `@1c-vector-search`

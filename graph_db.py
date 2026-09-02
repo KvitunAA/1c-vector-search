@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import kuzu
 
 from config import Config
+from object_identifier import ObjectIdentifier, parse_object_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +99,16 @@ class GraphDBManager:
 
     def _open_database(self) -> None:
         last_exc: Optional[BaseException] = None
+        buffer_pool_size = max(0, getattr(Config, "KUZU_BUFFER_POOL_SIZE", 0))
         for attempt in range(1, self.lock_retries + 1):
             try:
-                self._db = kuzu.Database(str(self.db_path), read_only=self.read_only)
+                self._db = kuzu.Database(
+                    str(self.db_path),
+                    buffer_pool_size=buffer_pool_size,
+                    read_only=self.read_only,
+                )
+                if buffer_pool_size and not self.read_only:
+                    logger.info("Kuzu buffer pool: %s MB", buffer_pool_size // (1024 * 1024))
                 return
             except Exception as exc:
                 last_exc = exc
@@ -127,9 +135,15 @@ class GraphDBManager:
         return self._conn
 
     def _init_db(self):
-        conn = self._get_conn()
         if self.read_only:
+            if not self._unavailable:
+                self._get_conn()
             return
+        # На большой БД CREATE IF NOT EXISTS может исчерпать buffer pool Kuzu.
+        if self.db_path.is_file() and self.db_path.stat().st_size > 4096:
+            self._get_conn()
+            return
+        conn = self._get_conn()
         conn.execute(
             """
             CREATE NODE TABLE IF NOT EXISTS Node(
@@ -189,6 +203,60 @@ class GraphDBManager:
             },
         )
 
+    def _add_nodes_individual(self, nodes: List[Dict[str, str]]) -> None:
+        """Поштучная запись узлов — fallback при ошибке UNWIND/CSV."""
+        close_every = max(25, getattr(Config, "GRAPH_FLUSH_CLOSE_EVERY", 100))
+        for index, node in enumerate(nodes, start=1):
+            extra = self._extra_dict(node.get("extra", ""))
+            try:
+                self.add_node(
+                    node_id=node["id"],
+                    node_type=node["node_type"],
+                    name=node["name"],
+                    object_type=node["object_type"] or None,
+                    object_name=node["object_name"] or None,
+                    synonym=node["synonym"] or None,
+                    extra=extra,
+                )
+            except RuntimeError as exc:
+                logger.warning(
+                    "Поштучная запись узла %s не удалась (%s), release и повтор",
+                    node["id"],
+                    exc,
+                )
+                self.close()
+                self.add_node(
+                    node_id=node["id"],
+                    node_type=node["node_type"],
+                    name=node["name"],
+                    object_type=node["object_type"] or None,
+                    object_name=node["object_name"] or None,
+                    synonym=node["synonym"] or None,
+                    extra=extra,
+                )
+            if index % close_every == 0:
+                gc.collect()
+                self.close()
+                logger.info("Поштучная запись узлов: %s/%s", index, len(nodes))
+
+    def _add_edges_individual(self, edges: List[Dict[str, Any]]) -> None:
+        """Поштучная запись рёбер — fallback при ошибке UNWIND/CSV."""
+        close_every = max(25, getattr(Config, "GRAPH_FLUSH_CLOSE_EVERY", 100))
+        for index, edge in enumerate(edges, start=1):
+            extra = edge.get("extra")
+            if isinstance(extra, str) and extra:
+                extra = json.loads(extra)
+            self.add_edge(
+                source_id=str(edge["source"]),
+                target_id=str(edge["target"]),
+                edge_type=edge["edge_type"],
+                extra=extra if extra else None,
+            )
+            if index % close_every == 0:
+                gc.collect()
+                self.close()
+                logger.info("Поштучная запись рёбер: %s/%s", index, len(edges))
+
     def add_edge(
         self,
         source_id: str,
@@ -230,6 +298,33 @@ class GraphDBManager:
     @staticmethod
     def _batch_size() -> int:
         return max(1, getattr(Config, "GRAPH_WRITE_BATCH_SIZE", 5000))
+
+    def _csv_batch_size(self) -> int:
+        if self._is_large_graph():
+            return max(1, getattr(Config, "GRAPH_CSV_BATCH_SIZE", 50))
+        return self._batch_size()
+
+    def _is_large_graph(self) -> bool:
+        threshold_mb = max(0, getattr(Config, "GRAPH_LARGE_GRAPH_THRESHOLD_MB", 300))
+        if threshold_mb <= 0:
+            return False
+        try:
+            return self.db_path.stat().st_size > threshold_mb * 1024 * 1024
+        except OSError:
+            return False
+
+    def _release_every_n_batches(self) -> int:
+        return max(1, getattr(Config, "GRAPH_RELEASE_EVERY_N_BATCHES", 4))
+
+    def _release_after_batch(self, chunk_index: int = 1, total_chunks: int = 1) -> None:
+        if not self._is_large_graph():
+            gc.collect()
+            return
+        release_every = self._release_every_n_batches()
+        if chunk_index % release_every == 0 or chunk_index >= total_chunks:
+            self.close()
+        else:
+            gc.collect()
 
     @staticmethod
     def _chunked(items: Sequence[Dict[str, Any]], size: int) -> Iterable[List[Dict[str, Any]]]:
@@ -347,25 +442,60 @@ class GraphDBManager:
         return json.loads(extra_value)
 
     def _flush_nodes_with_extra(self, nodes: List[Dict[str, str]]) -> None:
-        for node in nodes:
-            self.add_node(
-                node_id=node["id"],
-                node_type=node["node_type"],
-                name=node["name"],
-                object_type=node["object_type"] or None,
-                object_name=node["object_name"] or None,
-                synonym=node["synonym"] or None,
-                extra=self._extra_dict(node["extra"]),
-            )
+        batch_size = self._csv_batch_size()
+        try:
+            self._unwind_nodes_batch(nodes, batch_size)
+        except RuntimeError as exc:
+            logger.warning("UNWIND узлов не удался (%s), fallback на поштучную запись", exc)
+            self.close()
+            self._add_nodes_individual(nodes)
 
     def _flush_edges_with_extra(self, edges: List[Dict[str, str]]) -> None:
-        for edge in edges:
-            self.add_edge(
-                source_id=edge["source"],
-                target_id=edge["target"],
-                edge_type=edge["edge_type"],
-                extra=self._extra_dict(edge["extra"]),
-            )
+        batch_size = self._csv_batch_size()
+        try:
+            self._unwind_edges_batch(edges, batch_size)
+        except RuntimeError as exc:
+            logger.warning("UNWIND рёбер не удался (%s), fallback на поштучную запись", exc)
+            self.close()
+            self._add_edges_individual(edges)
+
+    def _unwind_nodes_batch(self, nodes: List[Dict[str, str]], batch_size: int) -> None:
+        if not nodes:
+            return
+        cypher = """
+            UNWIND $batch AS row
+            MERGE (n:Node {id: row.id})
+            SET n.node_type = row.node_type,
+                n.name = row.name,
+                n.object_type = row.object_type,
+                n.object_name = row.object_name,
+                n.synonym = row.synonym,
+                n.extra = row.extra
+            """
+        total_chunks = (len(nodes) + batch_size - 1) // batch_size
+        for chunk_index, chunk in enumerate(self._chunked(nodes, batch_size), start=1):
+            conn = self._get_conn()
+            conn.execute(cypher, {"batch": chunk})
+            if chunk_index == 1 or chunk_index == total_chunks or chunk_index % 10 == 0:
+                logger.info("UNWIND-запись узлов: чанк %s/%s (%s шт.)", chunk_index, total_chunks, len(chunk))
+            self._release_after_batch(chunk_index, total_chunks)
+
+    def _unwind_edges_batch(self, edges: List[Dict[str, str]], batch_size: int) -> None:
+        if not edges:
+            return
+        cypher = """
+            UNWIND $batch AS row
+            MATCH (s:Node {id: row.source}), (t:Node {id: row.target})
+            MERGE (s)-[r:REL {edge_type: row.edge_type}]->(t)
+            SET r.extra = row.extra
+            """
+        total_chunks = (len(edges) + batch_size - 1) // batch_size
+        for chunk_index, chunk in enumerate(self._chunked(edges, batch_size), start=1):
+            conn = self._get_conn()
+            conn.execute(cypher, {"batch": chunk})
+            if chunk_index == 1 or chunk_index == total_chunks or chunk_index % 10 == 0:
+                logger.info("UNWIND-запись рёбер: чанк %s/%s (%s шт.)", chunk_index, total_chunks, len(chunk))
+            self._release_after_batch(chunk_index, total_chunks)
 
     def add_nodes_batch(self, nodes: List[Dict[str, Any]]) -> None:
         """Пакетное добавление узлов (upsert через MERGE)."""
@@ -373,7 +503,7 @@ class GraphDBManager:
             return
 
         normalized = self._dedupe_nodes(nodes)
-        batch_size = self._batch_size()
+        batch_size = self._csv_batch_size()
         plain_nodes, nodes_rowwise = self._partition_csv_safe(normalized)
 
         total_chunks = (len(plain_nodes) + batch_size - 1) // batch_size if plain_nodes else 0
@@ -385,6 +515,20 @@ class GraphDBManager:
             total_chunks,
         )
 
+        if self._is_large_graph():
+            logger.info(
+                "UNWIND-запись всех узлов (большой граф): %s, чанков по %s",
+                len(normalized),
+                batch_size,
+            )
+            try:
+                self._unwind_nodes_batch(normalized, batch_size)
+            except RuntimeError as exc:
+                logger.warning("UNWIND узлов не удался (%s), fallback на поштучную запись", exc)
+                self.close()
+                self._add_nodes_individual(normalized)
+            return
+
         cypher_body = """
 MERGE (n:Node {id: id})
 SET n.node_type = node_type,
@@ -395,8 +539,14 @@ SET n.node_type = node_type,
     n.extra = extra
 """
         for chunk_index, chunk in enumerate(self._chunked(plain_nodes, batch_size), start=1):
-            self._execute_load_from_rows(chunk, _NODE_COLUMNS, cypher_body)
+            try:
+                self._execute_load_from_rows(chunk, _NODE_COLUMNS, cypher_body)
+            except RuntimeError as exc:
+                logger.warning("CSV-запись узлов не удалась (%s), fallback на UNWIND", exc)
+                self.close()
+                self._unwind_nodes_batch(chunk, batch_size)
             logger.debug("Записан чанк узлов %s/%s", chunk_index, total_chunks)
+            self._release_after_batch(chunk_index, total_chunks or 1)
         if nodes_rowwise:
             self._flush_nodes_with_extra(nodes_rowwise)
 
@@ -406,7 +556,21 @@ SET n.node_type = node_type,
             return
 
         normalized = self._dedupe_edges(edges)
-        batch_size = self._batch_size()
+        batch_size = self._csv_batch_size()
+        if self._is_large_graph():
+            logger.info(
+                "UNWIND-запись всех рёбер (большой граф): %s, чанков по %s",
+                len(normalized),
+                batch_size,
+            )
+            try:
+                self._unwind_edges_batch(normalized, batch_size)
+            except RuntimeError as exc:
+                logger.warning("UNWIND рёбер не удался (%s), fallback на поштучную запись", exc)
+                self.close()
+                self._add_edges_individual(normalized)
+            return
+
         plain_edges, edges_rowwise = self._partition_csv_safe(normalized)
 
         total_chunks = (len(plain_edges) + batch_size - 1) // batch_size if plain_edges else 0
@@ -425,7 +589,11 @@ SET r.extra = extra
 """
         for chunk_index, chunk in enumerate(self._chunked(plain_edges, batch_size), start=1):
             self._execute_load_from_rows(chunk, _EDGE_COLUMNS, cypher_body)
-            logger.debug("Записан чанк рёбер %s/%s", chunk_index, total_chunks)
+            if chunk_index == 1 or chunk_index % 20 == 0 or chunk_index == total_chunks:
+                logger.info("Записан чанк рёбер %s/%s", chunk_index, total_chunks)
+            else:
+                logger.debug("Записан чанк рёбер %s/%s", chunk_index, total_chunks)
+            self._release_after_batch(chunk_index, total_chunks or 1)
         if edges_rowwise:
             self._flush_edges_with_extra(edges_rowwise)
 
@@ -439,6 +607,26 @@ SET r.extra = extra
             "edge_type": edge_type,
         }
 
+    @staticmethod
+    def _node_match_clause(alias: str, parsed: ObjectIdentifier) -> tuple[str, Dict[str, str]]:
+        """Условие Cypher для сопоставления узла по полному или короткому имени."""
+        conditions: List[str] = []
+        params: Dict[str, str] = {"short_name": parsed.object_name}
+
+        if parsed.node_id:
+            conditions.append(f"{alias}.id = $node_id")
+            params["node_id"] = parsed.node_id
+        if parsed.object_type:
+            conditions.append(
+                f"({alias}.object_type = $object_type AND {alias}.object_name = $object_name)"
+            )
+            params["object_type"] = parsed.object_type
+            params["object_name"] = parsed.object_name
+
+        conditions.append(f"{alias}.object_name = $short_name")
+        conditions.append(f"{alias}.name = $short_name")
+        return f"({' OR '.join(conditions)})", params
+
     def get_dependencies(
         self,
         object_name: str,
@@ -449,16 +637,18 @@ SET r.extra = extra
         if self._unavailable:
             return []
         limit = min(max(1, limit), 500)
+        parsed = parse_object_identifier(object_name)
+        target_where, params = self._node_match_clause("t", parsed)
         conn = self._get_conn()
         result = conn.execute(
             f"""
             MATCH (s:Node)-[r:REL]->(t:Node)
-            WHERE t.object_name = $name OR t.name = $name
+            WHERE {target_where}
             RETURN DISTINCT s.id, s.name, s.object_type, s.object_name, r.edge_type
             ORDER BY r.edge_type, s.name
             LIMIT {limit}
             """,
-            {"name": object_name},
+            params,
         )
         return self._collect(result)
 
@@ -467,16 +657,18 @@ SET r.extra = extra
         if self._unavailable:
             return []
         limit = min(max(1, limit), 500)
+        parsed = parse_object_identifier(object_name)
+        source_where, params = self._node_match_clause("s", parsed)
         conn = self._get_conn()
         result = conn.execute(
             f"""
             MATCH (s:Node)-[r:REL]->(t:Node)
-            WHERE s.object_name = $name OR s.name = $name
+            WHERE {source_where}
             RETURN DISTINCT t.id, t.name, t.object_type, t.object_name, r.edge_type
             ORDER BY r.edge_type, t.name
             LIMIT {limit}
             """,
-            {"name": object_name},
+            params,
         )
         return self._collect(result)
 

@@ -29,7 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Server("1c-vector-search")
+app = Server(Config.MCP_SERVER_NAME)
 db_manager = VectorDBManager()
 
 
@@ -477,7 +477,7 @@ async def main():
                 read_stream,
                 write_stream,
                 InitializationOptions(
-                    server_name="1c-vector-search",
+                    server_name=Config.MCP_SERVER_NAME,
                     server_version="0.1.0",
                     capabilities=app.get_capabilities(
                         notification_options=NotificationOptions(),

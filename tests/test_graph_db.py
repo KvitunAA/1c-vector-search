@@ -190,6 +190,14 @@ class TestGetDependencies:
         deps = graph.get_dependencies("X", limit=-5)
         assert len(deps) >= 1
 
+    def test_finds_dependencies_by_qualified_name(self, graph):
+        src = graph.ensure_metadata_node("Catalogs", "Контрагенты")
+        tgt = graph.ensure_metadata_node("Documents", "Заказ")
+        graph.add_edge(tgt, src, "REFERENCES")
+        deps = graph.get_dependencies("Catalogs.Контрагенты")
+        assert len(deps) >= 1
+        assert any("Заказ" in d["object"] for d in deps)
+
 
 class TestGetReferences:
     """Поиск ссылок (на что ссылается объект)."""
@@ -206,6 +214,27 @@ class TestGetReferences:
         graph.ensure_metadata_node("Catalogs", "БезСсылок")
         refs = graph.get_references("БезСсылок")
         assert refs == []
+
+    def test_finds_references_by_qualified_name(self, graph):
+        src = graph.ensure_metadata_node("Documents", "Заказ")
+        tgt = graph.ensure_metadata_node("Catalogs", "Номенклатура")
+        graph.add_edge(src, tgt, "REFERENCES")
+        refs = graph.get_references("Documents.Заказ")
+        assert len(refs) >= 1
+        assert any("Номенклатура" in r["object"] for r in refs)
+
+    def test_finds_references_by_metadata_node_id(self, graph):
+        src = graph.ensure_metadata_node("Documents", "Заказ")
+        graph.add_node(
+            "method:Documents:Заказ:ObjectModule:ОбработкаПроведения",
+            "Method",
+            "ОбработкаПроведения",
+            object_type="Documents",
+            object_name="Заказ",
+        )
+        graph.add_edge(src, "method:Documents:Заказ:ObjectModule:ОбработкаПроведения", "HAS_METHOD")
+        refs = graph.get_references("metadata:Documents:Заказ")
+        assert any(r["edge_type"] == "HAS_METHOD" for r in refs)
 
 
 class TestGetStats:

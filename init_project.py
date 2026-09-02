@@ -71,6 +71,10 @@ def create_project(
 # === ОБЯЗАТЕЛЬНЫЕ ПАРАМЕТРЫ ===
 CONFIG_PATH={config_path_obj.resolve()}
 
+# === MCP (имя сервера в Cursor; для нескольких конфигураций — разные имена) ===
+MCP_SERVER_NAME={mcp_name}
+CONFIG_DESCRIPTION={description}
+
 # === РАСШИРЕНИЕ КОНФИГУРАЦИИ (отдельные БД; см. run_index_extension_*) ===
 # Корень выгрузки расширения (Configuration.xml). Пусто — задайте при индексации --config-path.
 # EXTENSION_CONFIG_PATH=
@@ -292,7 +296,9 @@ pause
     instructions_src = project_root / "projects" / "your_project" / "ИнструкцияПоИспользованиюMCP.md"
     instructions_dst = project_dir / "ИнструкцияПоИспользованиюMCP.md"
     if instructions_src.exists():
-        instructions_dst.write_text(instructions_src.read_text(encoding="utf-8"), encoding="utf-8")
+        instr_text = instructions_src.read_text(encoding="utf-8")
+        instr_text = instr_text.replace("1c-vector-search", mcp_name)
+        instructions_dst.write_text(instr_text, encoding="utf-8")
         logger.success(f"Скопирован: {instructions_dst}")
 
     readme = project_dir / "README.md"

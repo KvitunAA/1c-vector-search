@@ -1,14 +1,25 @@
 {
+  "_comment": "Один репозиторий — несколько конфигураций 1С. Сгенерируйте автоматически: python scripts/sync_mcp_config.py",
   "mcpServers": {
-    "1c-vector-search": {
+    "tip_zup": {
       "command": "cmd",
-      "args": ["/c", "C:\\project\\run_server_your_project.cmd"],
+      "args": ["/c", "C:\\Cursor\\ProectVectorSearch\\run_server_tip_zup.cmd"],
       "env": {
-        "PROJECT_PROFILE": "your_project",
-        "VECTORDB_PATH": "C:\\project\\projects\\your_project\\vectordb",
-        "GRAPHDB_PATH": "C:\\project\\projects\\your_project\\graphdb\\graph.db"
+        "PROJECT_PROFILE": "tip_zup",
+        "VECTORDB_PATH": "C:\\Cursor\\ProectVectorSearch\\projects\\tip_zup\\vectordb",
+        "GRAPHDB_PATH": "C:\\Cursor\\ProectVectorSearch\\projects\\tip_zup\\graphdb\\graph.db"
       },
-      "description": "MCP сервер для семантического поиска по конфигурации 1С"
+      "description": "MCP: Зарплата и управление персоналом (ЗУП)"
+    },
+    "tip_erp": {
+      "command": "cmd",
+      "args": ["/c", "C:\\Cursor\\ProectVectorSearch\\run_server_tip_erp.cmd"],
+      "env": {
+        "PROJECT_PROFILE": "tip_erp",
+        "VECTORDB_PATH": "C:\\Cursor\\ProectVectorSearch\\projects\\tip_erp\\vectordb",
+        "GRAPHDB_PATH": "C:\\Cursor\\ProectVectorSearch\\projects\\tip_erp\\graphdb\\graph.db"
+      },
+      "description": "MCP: 1С:ERP"
     }
   }
 }

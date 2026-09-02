@@ -6,7 +6,7 @@
 import sys
 import json
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 from multiprocessing import Pool, cpu_count
 
 # Добавляем текущую директорию в путь поиска модулей
@@ -16,6 +16,7 @@ import logging
 from tqdm import tqdm
 from config import Config
 from graph_db import GraphDBManager
+from graph_staging import GraphStagingWriter
 from parser_1c import BSLParser, ConfigurationScanner, MetadataParser
 
 logging.basicConfig(
@@ -229,15 +230,45 @@ def _role_and_template_graph_records(
     return list(extra_nodes.values()), edges
 
 
-def _write_module_results_batch(graph: GraphDBManager, results: List[Dict[str, Any]]) -> None:
-    """Пакетная запись узлов и рёбер модулей в граф."""
+def _write_module_results_batch(
+    graph: GraphDBManager,
+    results: List[Dict[str, Any]],
+    chunk_size: Optional[int] = None,
+    on_chunk_complete: Optional[Callable[[int], None]] = None,
+    chunk_index_offset: int = 0,
+) -> None:
+    """Пакетная запись узлов и рёбер модулей в граф порциями."""
     if not results:
         return
 
-    nodes, edges = _collect_module_graph_records(results)
-    logger.info("Запись модулей в граф: %s узлов, %s рёбер", len(nodes), len(edges))
-    graph.add_nodes_batch(nodes)
-    graph.add_edges_batch(edges)
+    if chunk_size is None:
+        chunk_size = max(1, getattr(Config, "GRAPH_MODULE_CHUNK_SIZE", 100))
+
+    total_nodes = 0
+    total_edges = 0
+    for start in range(0, len(results), chunk_size):
+        chunk = results[start:start + chunk_size]
+        nodes, edges = _collect_module_graph_records(chunk)
+        total_nodes += len(nodes)
+        total_edges += len(edges)
+        global_start = chunk_index_offset + start + 1
+        global_end = chunk_index_offset + start + len(chunk)
+        logger.info(
+            "Запись модулей в граф (порция %s-%s): %s узлов, %s рёбер",
+            global_start,
+            global_end,
+            len(nodes),
+            len(edges),
+        )
+        graph.close()
+        graph.add_nodes_batch(nodes)
+        graph.close()
+        graph.add_edges_batch(edges)
+        graph.close()
+        if on_chunk_complete:
+            on_chunk_complete(chunk_index_offset + start + len(chunk))
+
+    logger.info("Запись модулей завершена: всего %s узлов, %s рёбер", total_nodes, total_edges)
 
 
 class GraphIndexer:
@@ -250,16 +281,23 @@ class GraphIndexer:
         clear_existing: bool = False,
         use_cache: bool = True,
         workers: int = None,
+        staging: bool = False,
     ):
         self.config_path = Path(config_path)
         self.scanner = ConfigurationScanner(self.config_path)
-        self.graph = GraphDBManager(db_path)
+        self.db_path = db_path or Config.GRAPHDB_PATH
+        self.staging_mode = staging
+        if staging:
+            logger.info("📦 Режим staging: сбор в CSV, Kuzu — только на финальном compact")
+            self.graph = GraphStagingWriter(Config.GRAPH_STAGING_PATH)
+        else:
+            self.graph = GraphDBManager(db_path)
         self.use_cache = use_cache
         self.workers = workers or max(1, cpu_count() - 1)
         self._fresh_graph_module_results: Optional[List[Dict[str, Any]]] = None
 
         if clear_existing:
-            logger.info("Очистка существующего графа...")
+            logger.info("Очистка существующего графа / staging...")
             self.graph.clear()
             self._clear_checkpoint()
 
@@ -515,6 +553,23 @@ class GraphIndexer:
         else:
             logger.info(" [3/3] Формы уже обработаны")
 
+        if self.staging_mode:
+            from compact_graph import compact_staging_to_kuzu
+
+            logger.info("📦 Финальный compact: staging CSV → Kuzu COPY...")
+            self.graph.write_csv_files()
+            compact_result = compact_staging_to_kuzu(
+                Path(Config.GRAPH_STAGING_PATH),
+                Path(self.db_path),
+                buffer_pool_size=getattr(Config, "KUZU_BUFFER_POOL_SIZE", 0),
+            )
+            logger.info(
+                "Kuzu graph.db: %.1f MB (%s узлов, %s рёбер)",
+                compact_result["size_mb"],
+                compact_result["nodes_count"],
+                compact_result["edges_count"],
+            )
+
         self._clear_checkpoint()
         stats = self.graph.get_stats()
         logger.info("=" * 60)
@@ -545,6 +600,11 @@ def main():
         "--extension",
         action="store_true",
         help="Использовать выгрузку и граф расширения (EXTENSION_*), не трогая БД основной конфигурации.",
+    )
+    parser.add_argument(
+        "--staging",
+        action="store_true",
+        help="Сбор в staging CSV (без MERGE в Kuzu), затем compact через COPY",
     )
     parser.add_argument(
         "--clear",
@@ -591,6 +651,7 @@ def main():
             clear_existing=args.clear,
             use_cache=not args.no_cache,
             workers=args.workers,
+            staging=args.staging,
         )
         indexer.index_all()
     except Exception as exc:

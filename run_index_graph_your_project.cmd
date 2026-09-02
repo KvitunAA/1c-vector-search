@@ -19,17 +19,20 @@ if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
 REM Опции управления индексацией:
 REM   CLEAR_GRAPH=1    - очистить граф перед индексацией
 REM   NO_CACHE=1       - игнорировать кэш сканирования
+REM   STAGING=1        - сбор в CSV, затем compact COPY (без MERGE-bloat)
 set "CLEAR_OPT="
 set "CACHE_OPT="
+set "STAGING_OPT="
 
 if defined CLEAR_GRAPH set "CLEAR_OPT=--clear"
 if defined NO_CACHE set "CACHE_OPT=--no-cache"
+if defined STAGING set "STAGING_OPT=--staging"
 
 REM Запуск индексатора (многопроцессорный, workers = cpu_count - 1 по умолчанию)
 REM Опционально: set INDEX_GRAPH_WORKERS=12
 set "WORKERS_OPT="
 if defined INDEX_GRAPH_WORKERS set "WORKERS_OPT=--workers %INDEX_GRAPH_WORKERS%"
 
-"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" %WORKERS_OPT% %CLEAR_OPT% %CACHE_OPT%
+"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" %WORKERS_OPT% %CLEAR_OPT% %CACHE_OPT% %STAGING_OPT%
 
 pause

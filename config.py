@@ -116,6 +116,13 @@ class Config:
     PROFILE_NAME = current_profile
     PROFILE_DIR = PROJECT_ROOT / "projects" / current_profile
 
+    # Имя MCP-сервера в Cursor (tip, tip_zup, 1c-vector-erp и т.д.)
+    MCP_SERVER_NAME = os.getenv(
+        "MCP_SERVER_NAME",
+        current_profile.replace("/", "_").replace("\\", "_"),
+    )
+    CONFIG_DESCRIPTION = os.getenv("CONFIG_DESCRIPTION", "")
+
     CONFIG_PATH = os.getenv("CONFIG_PATH", "")
     VECTORDB_PATH = os.getenv(
         "VECTORDB_PATH",
@@ -125,6 +132,10 @@ class Config:
     GRAPHDB_PATH = os.getenv(
         "GRAPHDB_PATH",
         str(PROFILE_DIR / "graphdb" / "graph.db")
+    )
+    GRAPH_STAGING_PATH = os.getenv(
+        "GRAPH_STAGING_PATH",
+        str(PROFILE_DIR / "graph_staging"),
     )
 
     # Выгрузка расширения конфигурации и отдельные БД (не пересекаются с основной конфигурацией)
@@ -209,6 +220,13 @@ class Config:
     BATCH_SIZE_METADATA = int(os.getenv("BATCH_SIZE_METADATA", "50"))
     BATCH_SIZE_FORMS = int(os.getenv("BATCH_SIZE_FORMS", "50"))
     GRAPH_WRITE_BATCH_SIZE = int(os.getenv("GRAPH_WRITE_BATCH_SIZE", "5000"))
+    GRAPH_CSV_BATCH_SIZE = int(os.getenv("GRAPH_CSV_BATCH_SIZE", "50"))
+    GRAPH_LARGE_GRAPH_THRESHOLD_MB = int(os.getenv("GRAPH_LARGE_GRAPH_THRESHOLD_MB", "300"))
+    GRAPH_FLUSH_CLOSE_EVERY = int(os.getenv("GRAPH_FLUSH_CLOSE_EVERY", "100"))
+    GRAPH_MODULE_CHUNK_SIZE = int(os.getenv("GRAPH_MODULE_CHUNK_SIZE", "100"))
+    GRAPH_STREAM_BATCH_SIZE = int(os.getenv("GRAPH_STREAM_BATCH_SIZE", "200"))
+    GRAPH_RELEASE_EVERY_N_BATCHES = int(os.getenv("GRAPH_RELEASE_EVERY_N_BATCHES", "4"))
+    KUZU_BUFFER_POOL_SIZE = int(os.getenv("KUZU_BUFFER_POOL_SIZE", "0"))
 
     DEFAULT_SEARCH_LIMIT = int(os.getenv("DEFAULT_SEARCH_LIMIT", "5"))
     MAX_SEARCH_LIMIT = int(os.getenv("MAX_SEARCH_LIMIT", "20"))

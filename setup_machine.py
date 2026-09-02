@@ -210,6 +210,20 @@ VECTOR_PYTHON_PATH={python_path}
     else:
         logger.warning("mcp_config.json отсутствует — создайте проекты через init_project.py --add-mcp")
 
+    try:
+        from mcp_profiles import discover_profiles, write_mcp_config
+
+        profiles = discover_profiles(vector_root / "projects")
+        if profiles and not args.dry_run:
+            out = write_mcp_config(repo_root=vector_root)
+            logger.success(
+                f"mcp_config.json: синхронизировано {len(profiles)} профилей → {out.name}"
+            )
+        elif profiles and args.dry_run:
+            logger.info(f"[dry-run] Будет синхронизировано профилей MCP: {len(profiles)}")
+    except Exception as exc:
+        logger.warning(f"Синхронизация профилей MCP пропущена: {exc}")
+
     logger.info("=" * 60)
     logger.info("Следующие шаги:")
     logger.info("1. Создайте projects/<имя>/*.env.local для CONFIG_PATH (путь к выгрузке 1С)")
