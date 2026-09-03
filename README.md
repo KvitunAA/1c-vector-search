@@ -193,7 +193,38 @@ run_app.cmd
 | `EXTENSION_VECTORDB_PATH` | Каталог векторной БД только для расширения | `projects/<профиль>/extension_vectordb` |
 | `EXTENSION_GRAPHDB_PATH` | Каталог графа Kuzu только для расширения | `projects/<профиль>/extension_graphdb/graph.db` |
 
-**Одним запуском — основная конфигурация и расширение:** `run_index_all_your_project.cmd` или `python run_index_all.py` (после `set PROJECT_PROFILE=...`). Выполняется по шагам: векторная БД основной конфигурации → граф основной конфигурации → векторная БД расширения → граф расширения. Если `EXTENSION_CONFIG_PATH` не задан, выполняются только шаги 1–2. Число процессов для графа задаётся переменной `INDEX_GRAPH_WORKERS` (по умолчанию `8`).
+**Одним запуском — основная конфигурация и расширение (раздельные БД):** `run_index_all_your_project.cmd` или `python run_index_all.py` (после `set PROJECT_PROFILE=...`). Выполняется по шагам: векторная БД основной конфигурации → граф основной конфигурации → векторная БД расширения → граф расширения. Если `EXTENSION_CONFIG_PATH` не задан, выполняются только шаги 1–2. Число процессов для графа задаётся переменной `INDEX_GRAPH_WORKERS` (по умолчанию `8`).
+
+### Объединённая индексация: один MCP, одна БД (основная конфигурация + все расширения)
+
+Если нужен **один** MCP-сервер и **один** запрос `search_1c_*` по основной конфигурации и **всем** расширениям сразу:
+
+| Переменная | Назначение |
+|------------|------------|
+| `CONFIG_PATH` | Корень выгрузки основной конфигурации |
+| `EXTENSIONS_ROOT` | Каталог, где **каждая подпапка** с `Configuration.xml` — отдельное расширение |
+| `EXTENSION_CONFIG_PATHS` | Явный список путей к расширениям через `;` (альтернатива `EXTENSIONS_ROOT`) |
+| `EXTENSION_CONFIG_PATH` | Одно расширение (совместимость; можно комбинировать с путями выше) |
+
+**Запуск:** `run_index_unified_your_project.cmd` или `python run_index_unified.py`.
+
+Порядок: основная конфигурация (вектор + граф, с очисткой БД) → каждое расширение (дозапись в те же `vectordb` / `graphdb`). В результатах поиска — поля `index_source`, `source_id`, `configuration_name`, `config_root`.
+
+Пример `.env`:
+
+```env
+CONFIG_PATH=C:\dump\UT
+EXTENSIONS_ROOT=C:\dump\extensions
+```
+
+Структура каталога расширений:
+
+```text
+C:\dump\extensions\
+  Ext_Доработки\Configuration.xml
+  Ext_Интеграция\Configuration.xml
+  Ext_Отчеты\Configuration.xml
+```
 
 **Индексация только расширения** (основные `vectordb` / `graphdb` не изменяются):
 

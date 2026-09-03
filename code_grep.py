@@ -108,3 +108,39 @@ def grep_method_usage(
                     return results
 
     return results
+
+
+def grep_method_usage_many(
+    method_name: str,
+    config_paths: Optional[List[Path]] = None,
+    limit: int = 50,
+) -> List[Dict]:
+    """Ищет вхождения метода во всех указанных выгрузках конфигурации."""
+    paths = config_paths or [Path(p) for p in Config.get_all_config_paths() if p]
+    if not paths:
+        single = Config.CONFIG_PATH
+        if single:
+            paths = [Path(single)]
+
+    combined: List[Dict] = []
+    per_path_limit = max(limit, 1)
+
+    for config_path in paths:
+        if len(combined) >= limit:
+            break
+        remaining = limit - len(combined)
+        for item in grep_method_usage(method_name, config_path=config_path, limit=min(per_path_limit, remaining)):
+            enriched = dict(item)
+            enriched["config_root"] = str(config_path)
+            try:
+                from config_dump import read_configuration_dump_info
+
+                dump = read_configuration_dump_info(config_path)
+                if dump.get("valid"):
+                    enriched["index_source"] = "extension" if dump.get("is_extension") else "main"
+                    enriched["configuration_name"] = dump.get("configuration_name", "")
+            except Exception:
+                pass
+            combined.append(enriched)
+
+    return combined[:limit]

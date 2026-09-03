@@ -207,11 +207,11 @@ class TestAddCodeChunks:
         vdb.add_code_chunks(chunks)
         first = vdb._conn.execute(
             'SELECT document FROM "1c_code_items" WHERE item_id = ?',
-            ("code_0_ДлиннаяПроцедура_0",),
+            ("main_code_Catalogs_Тест__ДлиннаяПроцедура_0",),
         ).fetchone()[0]
         second = vdb._conn.execute(
             'SELECT document FROM "1c_code_items" WHERE item_id = ?',
-            ("code_1_ДлиннаяПроцедура_1",),
+            ("main_code_Catalogs_Тест__ДлиннаяПроцедура_1",),
         ).fetchone()[0]
         assert "// Параметры: Регистратор" in first
         assert "// Параметры: Регистратор" not in second

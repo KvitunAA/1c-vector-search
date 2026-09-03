@@ -17,7 +17,7 @@ import mcp.types as types
 from config import Config
 from vectordb_manager import VectorDBManager
 from graph_db import GraphDBManager
-from code_grep import grep_method_usage
+from code_grep import grep_method_usage_many
 
 logging.basicConfig(
     level=getattr(logging, Config.LOG_LEVEL),
@@ -45,6 +45,16 @@ def _graph_session():
 
 logger.info("MCP Сервер запущен")
 logger.info(f"Векторная БД: {Config.VECTORDB_PATH}")
+all_paths = Config.get_all_config_paths()
+if len(all_paths) > 1:
+    logger.info("Объединённый индекс: основная конфигурация + %s расширений", len(all_paths) - 1)
+
+
+def _append_source_fields(item: dict, metadata: dict) -> None:
+    for key in ("index_source", "source_id", "configuration_name", "config_root"):
+        value = metadata.get(key)
+        if value not in (None, ""):
+            item[key] = value
 
 
 @app.list_tools()
@@ -211,6 +221,7 @@ async def handle_call_tool(
                 directive = metadata.get("directive", "")
                 if directive:
                     item["directive"] = directive
+                _append_source_fields(item, metadata)
                 formatted_results.append(item)
             response = {"query": query, "total_results": len(formatted_results), "results": formatted_results}
             return [types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False, indent=2))]
@@ -249,6 +260,7 @@ async def handle_call_tool(
                     item["has_resources"] = True
                 if metadata.get("commands_count", 0) > 0:
                     item["commands_count"] = metadata["commands_count"]
+                _append_source_fields(item, metadata)
                 formatted_results.append(item)
             response = {"query": query, "object_type_filter": object_type, "total_results": len(formatted_results), "results": formatted_results}
             return [types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False, indent=2))]
@@ -263,14 +275,16 @@ async def handle_call_tool(
             formatted_results = []
             for result in results:
                 metadata = result["metadata"]
-                formatted_results.append({
+                item = {
                     "rank": result["rank"],
                     "relevance": result["relevance"],
                     "form_name": metadata.get("form_name", ""),
                     "object": f"{metadata.get('object_type', '')}.{metadata.get('object_name', '')}",
                     "elements_count": metadata.get("elements_count", 0),
                     "file_path": metadata.get("file_path", "")
-                })
+                }
+                _append_source_fields(item, metadata)
+                formatted_results.append(item)
             response = {"query": query, "total_results": len(formatted_results), "results": formatted_results}
             return [types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False, indent=2))]
 
@@ -280,9 +294,9 @@ async def handle_call_tool(
                 return [types.TextContent(type="text", text=json.dumps({"error": "method_name обязателен и не может быть пустым"}, ensure_ascii=False))]
             limit = arguments.get("limit", 10)
             logger.info(f"Поиск использования метода: '{method_name}' (limit={limit})")
-            config_path = Path(Config.CONFIG_PATH) if Config.CONFIG_PATH else None
-            if config_path and config_path.exists():
-                grep_results = grep_method_usage(method_name, config_path=config_path, limit=limit)
+            config_paths = [Path(p) for p in Config.get_all_config_paths() if p and Path(p).exists()]
+            if config_paths:
+                grep_results = grep_method_usage_many(method_name, config_paths=config_paths, limit=limit)
                 usages = [
                     {
                         "object": f"{r['object_type']}.{r['object_name']}",
@@ -292,6 +306,9 @@ async def handle_call_tool(
                         "line_content": r["line_content"],
                         "file_path": r["file_path"],
                         "source": "grep",
+                        "index_source": r.get("index_source", ""),
+                        "configuration_name": r.get("configuration_name", ""),
+                        "config_root": r.get("config_root", ""),
                     }
                     for r in grep_results
                 ]
@@ -344,6 +361,7 @@ async def handle_call_tool(
             response = {
                 "database_path": Config.VECTORDB_PATH,
                 "configuration_path": Config.CONFIG_PATH,
+                "configuration_paths": Config.get_all_config_paths(),
                 "collections": stats,
                 "total_records": sum(stats.values())
             }

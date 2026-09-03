@@ -148,6 +148,11 @@ class Config:
         "EXTENSION_GRAPHDB_PATH",
         str(PROFILE_DIR / "extension_graphdb" / "graph.db"),
     )
+    # Несколько расширений для объединённой индексации (run_index_unified.py):
+    # EXTENSIONS_ROOT — каталог, где каждая подпапка с Configuration.xml — расширение;
+    # EXTENSION_CONFIG_PATHS — явный список путей через «;» или с новой строки.
+    EXTENSIONS_ROOT = os.getenv("EXTENSIONS_ROOT", "")
+    EXTENSION_CONFIG_PATHS = os.getenv("EXTENSION_CONFIG_PATHS", "")
 
     EMBEDDING_MODEL = os.getenv(
         "EMBEDDING_MODEL",
@@ -250,6 +255,27 @@ class Config:
     LOG_LEVEL = (os.getenv("LOG_LEVEL", "INFO") or "INFO").upper()
 
     @classmethod
+    def get_extension_config_paths(cls) -> list:
+        """Все пути расширений из профиля (без основной конфигурации)."""
+        from config_paths import collect_extension_config_paths
+
+        return collect_extension_config_paths(
+            cls.EXTENSION_CONFIG_PATH,
+            cls.EXTENSION_CONFIG_PATHS,
+            cls.EXTENSIONS_ROOT,
+            exclude_paths=[cls.CONFIG_PATH] if cls.CONFIG_PATH else None,
+        )
+
+    @classmethod
+    def get_all_config_paths(cls) -> list:
+        """Основная конфигурация и все расширения (для grep и статистики MCP)."""
+        paths = []
+        if cls.CONFIG_PATH.strip():
+            paths.append(cls.CONFIG_PATH.strip())
+        paths.extend(cls.get_extension_config_paths())
+        return paths
+
+    @classmethod
     def validate(cls):
         """Валидация конфигурации"""
         errors = []
@@ -279,8 +305,17 @@ class Config:
         logger.info(f"Путь к векторной БД (sqlite-vec): {cls.VECTORDB_PATH}")
         logger.info(f"Путь к графовой БД (Kuzu): {cls.GRAPHDB_PATH}")
         logger.info(f"Расширение — выгрузка (EXTENSION_CONFIG_PATH): {cls.EXTENSION_CONFIG_PATH or '(не задано)'}")
-        logger.info(f"Расширение — векторная БД: {cls.EXTENSION_VECTORDB_PATH}")
-        logger.info(f"Расширение — граф: {cls.EXTENSION_GRAPHDB_PATH}")
+        logger.info(f"Расширения — каталог (EXTENSIONS_ROOT): {cls.EXTENSIONS_ROOT or '(не задано)'}")
+        ext_paths = cls.get_extension_config_paths()
+        if ext_paths:
+            logger.info(f"Расширения для unified ({len(ext_paths)}):")
+            for path in ext_paths:
+                logger.info(f"  - {path}")
+        elif cls.EXTENSION_CONFIG_PATHS.strip():
+            logger.info("EXTENSION_CONFIG_PATHS задан, но пути не найдены или совпадают с CONFIG_PATH")
+        logger.info(f"Расширение — отдельная векторная БД: {cls.EXTENSION_VECTORDB_PATH}")
+        logger.info(f"Расширение — отдельный граф: {cls.EXTENSION_GRAPHDB_PATH}")
+        logger.info("Объединённая индексация: run_index_unified_<профиль>.cmd")
         logger.info(f"Модель эмбеддингов: {cls.EMBEDDING_MODEL}")
         dim_source = "env" if os.getenv("EMBEDDING_DIMENSION", "").strip().isdigit() else "auto"
         logger.info(f"Размерность эмбеддингов: {cls.EMBEDDING_DIMENSION} ({dim_source})")

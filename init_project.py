@@ -134,10 +134,18 @@ CONFIG_PATH={config_path_obj.resolve()}
 MCP_SERVER_NAME={mcp_name}
 CONFIG_DESCRIPTION={description}
 
-# === РАСШИРЕНИЕ КОНФИГУРАЦИИ (отдельные БД; см. run_index_extension_*) ===
-# Корень выгрузки расширения (Configuration.xml). Пусто — задайте при индексации --config-path.
-# EXTENSION_CONFIG_PATH=
-# EXTENSION_VECTORDB_PATH по умолчанию: projects/{name}/extension_vectordb
+# === РАСШИРЕНИЕ КОНФИГУРАЦИИ ===
+# Вариант A (раздельные БД): run_index_extension_* / run_index_all_*
+# EXTENSION_CONFIG_PATH=C:\path\to\one\extension
+#
+# Вариант B (один MCP, одна БД — основная + все расширения): run_index_unified_*
+# CONFIG_PATH=C:\path\to\main\config
+# EXTENSIONS_ROOT=C:\path\to\extensions_folder
+#   (внутри подпапки Ext1\, Ext2\ — каждая с Configuration.xml в корне)
+# или явный список:
+# EXTENSION_CONFIG_PATHS=C:\path\to\ext1;C:\path\to\ext2
+#
+# EXTENSION_VECTORDB_PATH по умолчанию: projects/{name}/extension_vectordb  (только для варианта A)
 # EXTENSION_GRAPHDB_PATH по умолчанию: projects/{name}/extension_graphdb/graph.db
 
 # === ОПЦИОНАЛЬНЫЕ (VECTORDB_PATH по умолчанию: projects/{name}/vectordb) ===
@@ -269,6 +277,31 @@ pause
         encoding="utf-8",
     )
     logger.success(f"Создан: {run_index_all_cmd}")
+
+    run_index_unified_cmd = project_root / f"run_index_unified_{name}.cmd"
+    run_index_unified_cmd.write_text(
+        f'''@echo off
+chcp 65001 >nul
+REM Объединённая индексация: CONFIG_PATH + все расширения (EXTENSIONS_ROOT / EXTENSION_CONFIG_PATHS) в один MCP
+
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
+
+set PROJECT_PROFILE={name}
+set VECTORDB_PATH=%SCRIPT_DIR%projects\\{name}\\vectordb
+set GRAPHDB_PATH=%SCRIPT_DIR%projects\\{name}\\graphdb\\graph.db
+
+set "PYTHON=python"
+if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
+
+"%PYTHON%" "%SCRIPT_DIR%run_index_unified.py"
+
+pause
+''',
+        encoding="utf-8",
+    )
+    logger.success(f"Создан: {run_index_unified_cmd}")
 
     mcp_setup = project_dir / "MCP_SETUP.md"
     mcp_setup_content = f"""# Подключение {name} к MCP в Cursor

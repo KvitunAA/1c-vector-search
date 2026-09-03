@@ -277,6 +277,17 @@ class VectorDBManager:
             self._conn.rollback()
             logger.error(f"Ошибка добавления записей в коллекцию '{collection_key}': {e}")
 
+    def _source_prefix(self, payload: Dict) -> str:
+        source_id = (payload.get("source_id") or payload.get("index_source") or "main").strip()
+        safe = re.sub(r"[^\w\-]+", "_", source_id).strip("_") or "main"
+        return safe[:64]
+
+    def _merge_source_metadata(self, metadata: Dict, payload: Dict) -> Dict:
+        for key in ("index_source", "source_id", "configuration_name", "config_root", "is_extension"):
+            if key in payload and payload[key] not in (None, ""):
+                metadata[key] = payload[key]
+        return metadata
+
     def add_code_chunks(self, chunks: List[Dict], batch_size: int = None):
         if batch_size is None:
             batch_size = getattr(Config, "BATCH_SIZE_CODE", 100)
@@ -296,7 +307,7 @@ class VectorDBManager:
                 text_parts.append(chunk["signature"])
                 text_parts.append(chunk["code"])
                 document = self._truncate("\n".join(text_parts))
-                metadata = {
+                metadata = self._merge_source_metadata({
                     "object_type": chunk.get("object_type", ""),
                     "object_name": chunk.get("object_name", ""),
                     "module_name": chunk.get("module_name", ""),
@@ -308,9 +319,13 @@ class VectorDBManager:
                     "file_path": chunk.get("file_path", ""),
                     "chunk_index": chunk.get("chunk_index", 0),
                     "total_chunks": chunk.get("total_chunks", 1),
-                }
+                }, chunk)
                 chunk_idx = chunk.get("chunk_index", 0)
-                item_id = f"code_{i + j}_{chunk.get('method_name', 'unknown')}_{chunk_idx}"
+                prefix = self._source_prefix(chunk)
+                item_id = (
+                    f"{prefix}_code_{chunk.get('object_type', '')}_{chunk.get('object_name', '')}_"
+                    f"{chunk.get('module_name', '')}_{chunk.get('method_name', 'unknown')}_{chunk_idx}"
+                )
                 records.append({"item_id": item_id, "document": document, "metadata": metadata})
             self._insert_batch("code", records)
             logger.info(f"Добавлено {len(batch)} чанков кода (батч {i // batch_size + 1})")
@@ -415,7 +430,7 @@ class VectorDBManager:
                 ts_names = []
                 for ts in obj.get('tabular_sections', []):
                     ts_names.append(ts['name'] if isinstance(ts, dict) else str(ts))
-                metadata = {
+                metadata = self._merge_source_metadata({
                     "object_name": obj.get('name', ''),
                     "object_type": obj_type,
                     "synonym": obj.get('synonym', ''),
@@ -427,8 +442,9 @@ class VectorDBManager:
                     "has_resources": len(obj.get('resources', [])) > 0,
                     "commands_count": len(obj.get('commands', [])),
                     "file_path": obj.get('file_path', '')
-                }
-                item_id = f"metadata_{obj_type}_{obj.get('name', 'unknown')}_{i + j}"
+                }, obj)
+                prefix = self._source_prefix(obj)
+                item_id = f"{prefix}_metadata_{obj_type}_{obj.get('name', 'unknown')}"
                 records.append({"item_id": item_id, "document": document, "metadata": metadata})
             self._insert_batch("metadata", records)
             logger.info(f"Добавлено {len(batch)} объектов метаданных (батч {i // batch_size + 1})")
@@ -447,14 +463,18 @@ class VectorDBManager:
                 if form.get('elements'):
                     text_parts.append(f"Элементы: {', '.join(form['elements'][:20])}")
                 document = self._truncate("\n".join(text_parts))
-                metadata = {
+                metadata = self._merge_source_metadata({
                     "form_name": form.get('form_name', ''),
                     "object_name": form.get('object_name', ''),
                     "object_type": form.get('object_type', ''),
                     "elements_count": form.get('elements_count', 0),
                     "file_path": form.get('file_path', '')
-                }
-                item_id = f"form_{form.get('object_name', 'unknown')}_{form.get('form_name', 'unknown')}_{i + j}"
+                }, form)
+                prefix = self._source_prefix(form)
+                item_id = (
+                    f"{prefix}_form_{form.get('object_name', 'unknown')}_"
+                    f"{form.get('form_name', 'unknown')}"
+                )
                 records.append({"item_id": item_id, "document": document, "metadata": metadata})
             self._insert_batch("forms", records)
             logger.info(f"Добавлено {len(batch)} форм (батч {i // batch_size + 1})")

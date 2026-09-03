@@ -4,7 +4,7 @@
 import logging
 import sys
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import argparse
 from tqdm import tqdm
 
@@ -27,15 +27,32 @@ class ConfigIndexer:
         db_path: str = None,
         clear_existing: bool = False,
         graph_db_path: Optional[str] = None,
+        index_source: Optional[Dict[str, Any]] = None,
     ):
         self.config_path = Path(config_path)
         self.scanner = ConfigurationScanner(self.config_path)
         self.db_manager = VectorDBManager(db_path)
         self.graph_db_path = graph_db_path if graph_db_path is not None else Config.GRAPHDB_PATH
+        self.index_source = index_source or {}
 
         if clear_existing:
             logger.info("Очистка существующей векторной БД...")
             self.db_manager.clear_all_collections()
+
+    def _source_fields(self) -> Dict[str, Any]:
+        if not self.index_source:
+            return {}
+        return {
+            key: self.index_source[key]
+            for key in (
+                "index_source",
+                "source_id",
+                "configuration_name",
+                "config_root",
+                "is_extension",
+            )
+            if key in self.index_source
+        }
 
     def index_all(self, vector_only: bool = False):
         """Полная индексация конфигурации"""
@@ -48,6 +65,13 @@ class ConfigIndexer:
             logger.info(f"Тип выгрузки: {kind}")
             if dump_info.get("configuration_name"):
                 logger.info(f"Имя в выгрузке: {dump_info['configuration_name']}")
+        source = self._source_fields()
+        if source.get("source_id"):
+            logger.info(
+                "Метка источника: index_source=%s, source_id=%s",
+                source.get("index_source", ""),
+                source.get("source_id", ""),
+            )
         if vector_only:
             logger.info("Режим: только векторная БД (граф пропускается)")
         logger.info("=" * 80)
@@ -115,7 +139,8 @@ class ConfigIndexer:
                     "is_export": method["is_export"],
                     "code": method["code"],
                     "comments": method.get("comments", []),
-                    "file_path": str(file_path)
+                    "file_path": str(file_path),
+                    **self._source_fields(),
                 }
                 sub_chunks = self._split_method_if_needed(base_chunk, max_chars, overlap_chars)
                 all_chunks.extend(sub_chunks)
@@ -193,6 +218,9 @@ class ConfigIndexer:
             return 0
 
         logger.info(f"Найдено {len(metadata_objects)} объектов метаданных")
+        source_fields = self._source_fields()
+        if source_fields:
+            metadata_objects = [{**obj, **source_fields} for obj in metadata_objects]
         logger.info(f"Добавление {len(metadata_objects)} объектов в векторную БД...")
         self.db_manager.add_metadata_objects(metadata_objects)
 
@@ -208,6 +236,9 @@ class ConfigIndexer:
             return 0
 
         logger.info(f"Найдено {len(forms)} форм")
+        source_fields = self._source_fields()
+        if source_fields:
+            forms = [{**form, **source_fields} for form in forms]
         logger.info(f"Добавление {len(forms)} форм в векторную БД...")
         self.db_manager.add_forms(forms)
 
