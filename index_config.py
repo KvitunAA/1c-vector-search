@@ -10,17 +10,11 @@ from tqdm import tqdm
 
 from config import Config
 from config_dump import read_configuration_dump_info
+from logging_setup import setup_index_logging
 from parser_1c import ConfigurationScanner, BSLParser
 from vectordb_manager import VectorDBManager
 
-logging.basicConfig(
-    level=getattr(logging, Config.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('indexing.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+setup_index_logging(Config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 
@@ -87,7 +81,7 @@ class ConfigIndexer:
         for collection, count in stats.items():
             logger.info(f"  {collection}: {count} записей")
 
-        logger.info("\n✅ Конфигурация готова к использованию!")
+        logger.info("\nКонфигурация готова к использованию!")
 
     def _index_code(self) -> int:
         """Индексация кода модулей"""

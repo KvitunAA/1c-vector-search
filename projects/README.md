@@ -17,12 +17,28 @@
 | `run_index_your_project.cmd` | Полная индексация: векторная БД + граф (код, метаданные, формы, граф связей) |
 | `run_index_vector_your_project.cmd` | Только векторная БД: код, метаданные, формы (без графа) |
 | `run_index_graph_your_project.cmd` | Только граф связей (без векторной БД) |
+| `run_index_all_your_project.cmd` | Основная конфигурация + расширение (вектор и граф по очереди) |
+
+## Крупные конфигурации (БУХ, ERP)
+
+Для конфигураций с десятками тысяч объектов **обязательно** включайте staging-режим графа — иначе индексация может завершиться ошибкой Kuzu `buffer pool is full`.
+
+В `projects/<имя>/<имя>.env`:
+
+```env
+GRAPH_USE_STAGING=1
+INDEX_GRAPH_WORKERS=1
+```
+
+Или при создании профиля: `python init_project.py ... --large-config`.
+
+`run_index_all.py` читает `GRAPH_USE_STAGING` из профиля и передаёт `--staging` в `index_graph_mp.py`. Для отдельного запуска графа: `set STAGING=1` и `set CLEAR_GRAPH=1` перед `run_index_graph_*.cmd`.
 
 ## Создание нового проекта (каждая конфигурация 1С — отдельный профиль и MCP)
 
 ```cmd
 python init_project.py -n tip_zup -c "D:\1C\ZUP" -m tip_zup -d "MCP: ЗУП" --add-mcp -y
-python init_project.py -n tip_erp -c "D:\1C\ERP" -m tip_erp -d "MCP: ERP" --add-mcp -y
+python init_project.py -n tip_erp -c "D:\1C\ERP" -m tip_erp -d "MCP: ERP" --large-config --add-mcp -y
 python scripts\sync_mcp_config.py --cursor
 ```
 

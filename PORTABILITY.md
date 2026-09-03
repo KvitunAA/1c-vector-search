@@ -53,6 +53,17 @@
 python init_project.py -n my_project -c "F:\Configuration\Files" -m "1c-vector-search-my" -d "Описание" --add-mcp --index -y
 ```
 
+Для крупных конфигураций (БУХ, ERP, >15k объектов) добавьте `--large-config` — в профиль попадут `GRAPH_USE_STAGING=1`, `INDEX_GRAPH_WORKERS=1` и уменьшенные батчи графа. Либо задайте в `projects/<имя>/<имя>.env`:
+
+```env
+GRAPH_USE_STAGING=1
+INDEX_GRAPH_WORKERS=1
+```
+
+При `GRAPH_USE_STAGING=1` скрипт `run_index_all.py` автоматически передаёт `--staging` в `index_graph_mp.py` (сбор CSV + compact COPY вместо MERGE в Kuzu). Это предотвращает ошибку Kuzu «buffer pool is full» на больших конфигурациях.
+
+Для ручного запуска только графа: `set STAGING=1` и `set CLEAR_GRAPH=1`, затем `run_index_graph_<профиль>.cmd`.
+
 Рекомендуется задать путь к Python:
 
 ```cmd

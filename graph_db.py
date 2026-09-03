@@ -390,7 +390,13 @@ class GraphDBManager:
 
     @staticmethod
     def _row_needs_rowwise(row: Dict[str, str]) -> bool:
-        return any(GraphDBManager._value_needs_rowwise(value) for value in row.values())
+        # Поле extra — JSON; csv.DictWriter экранирует запятые и кавычки.
+        for key, value in row.items():
+            if key == "extra":
+                continue
+            if GraphDBManager._value_needs_rowwise(value):
+                return True
+        return False
 
     @staticmethod
     def _partition_csv_safe(

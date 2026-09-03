@@ -17,16 +17,10 @@ from tqdm import tqdm
 from config import Config
 from graph_db import GraphDBManager
 from graph_staging import GraphStagingWriter
+from logging_setup import setup_index_logging
 from parser_1c import BSLParser, ConfigurationScanner, MetadataParser
 
-logging.basicConfig(
-    level=getattr(logging, Config.LOG_LEVEL),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("indexing.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+setup_index_logging(Config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 # Файлы для управления состоянием
@@ -288,7 +282,7 @@ class GraphIndexer:
         self.db_path = db_path or Config.GRAPHDB_PATH
         self.staging_mode = staging
         if staging:
-            logger.info("📦 Режим staging: сбор в CSV, Kuzu — только на финальном compact")
+            logger.info("[staging] Режим staging: сбор в CSV, Kuzu — только на финальном compact")
             self.graph = GraphStagingWriter(Config.GRAPH_STAGING_PATH)
         else:
             self.graph = GraphDBManager(db_path)
@@ -305,7 +299,7 @@ class GraphIndexer:
         """Удаляет файл чекпоинта"""
         if Path(CHECKPOINT_FILE).exists():
             Path(CHECKPOINT_FILE).unlink()
-            logger.info("🗑️ Чекпоинт сброшен")
+            logger.info("Чекпоинт сброшен")
 
     def _save_checkpoint(self, stage: str, index: int):
         """Сохраняет текущий прогресс"""
@@ -329,7 +323,7 @@ class GraphIndexer:
         """Загружает данные из кеша сканирования"""
         cache_path = Path(SCAN_CACHE_FILE)
         if self.use_cache and cache_path.exists():
-            logger.info("📦 Загрузка данных из кеша сканирования: %s", cache_path)
+            logger.info("Загрузка данных из кеша сканирования: %s", cache_path)
             try:
                 with open(cache_path, "r", encoding="utf-8") as handle:
                     data = json.load(handle)
@@ -349,7 +343,7 @@ class GraphIndexer:
         """Сохраняет результаты сканирования"""
         if not self.use_cache:
             return
-        logger.info("💾 Сохранение данных в кеш сканирования: %s", SCAN_CACHE_FILE)
+        logger.info("Сохранение данных в кеш сканирования: %s", SCAN_CACHE_FILE)
         try:
             serializable_modules = []
             for file_path, object_full_name, methods in modules_data:
@@ -400,9 +394,9 @@ class GraphIndexer:
         logger.info("=" * 60)
         logger.info("Начало индексации графа конфигурации 1С")
         logger.info("Путь к конфигурации: %s", self.config_path)
-        logger.info("⚙️ Количество процессов: %s", self.workers)
-        logger.info("🤖 Модель эмбеддингов: %s", Config.EMBEDDING_MODEL)
-        logger.info("🌐 API Базовый URL: %s", Config.EMBEDDING_API_BASE)
+        logger.info("Количество процессов: %s", self.workers)
+        logger.info("Модель эмбеддингов: %s", Config.EMBEDDING_MODEL)
+        logger.info("API Базовый URL: %s", Config.EMBEDDING_API_BASE)
         logger.info("=" * 60)
 
         cached_data = self._load_scan_cache()
@@ -446,7 +440,7 @@ class GraphIndexer:
                 for item in graph_results
             ]
             logger.info(
-                "✅ Сканирование завершено: метаданные=%s, модули=%s, формы=%s",
+                "Сканирование завершено: метаданные=%s, модули=%s, формы=%s",
                 len(metadata_list),
                 len(modules_data),
                 len(forms_list),
@@ -456,7 +450,7 @@ class GraphIndexer:
         cp = self._load_checkpoint()
         start_meta_idx, start_mod_idx, start_form_idx = 0, 0, 0
         if cp:
-            logger.info("🚀 Обнаружен чекпоинт: Этап '%s', Индекс %s", cp["stage"], cp["index"])
+            logger.info("Обнаружен чекпоинт: Этап '%s', Индекс %s", cp["stage"], cp["index"])
             if cp["stage"] == "metadata":
                 start_meta_idx = cp["index"]
             if cp["stage"] == "modules":
@@ -464,13 +458,13 @@ class GraphIndexer:
             if cp["stage"] == "forms":
                 start_form_idx = cp["index"]
             if cp["stage"] in ["modules", "forms"]:
-                logger.info("⏭️ Этап метаданных пропущен (уже выполнен)")
+                logger.info("Этап метаданных пропущен (уже выполнен)")
                 start_meta_idx = len(metadata_list)
             if cp["stage"] == "forms":
-                logger.info("⏭️ Этап модулей пропущен (уже выполнен)")
+                logger.info("Этап модулей пропущен (уже выполнен)")
                 start_mod_idx = len(modules_data)
 
-        logger.info("🕸️ Построение графа...")
+        logger.info("Построение графа...")
         known_objects = frozenset(
             (item.get("object_type_dir", ""), item.get("name", "")) for item in metadata_list
         )
@@ -512,7 +506,7 @@ class GraphIndexer:
                 modules_slice = modules_data[start_mod_idx:]
                 module_results = self._process_modules_parallel(modules_slice, known_objects)
 
-            logger.info("💾 Пакетная запись модулей в графовую БД...")
+            logger.info("Пакетная запись модулей в графовую БД...")
             _write_module_results_batch(self.graph, module_results)
             self._save_checkpoint("modules", len(modules_data))
         else:
@@ -556,7 +550,7 @@ class GraphIndexer:
         if self.staging_mode:
             from compact_graph import compact_staging_to_kuzu
 
-            logger.info("📦 Финальный compact: staging CSV → Kuzu COPY...")
+            logger.info("[staging] Финальный compact: staging CSV -> Kuzu COPY...")
             self.graph.write_csv_files()
             compact_result = compact_staging_to_kuzu(
                 Path(Config.GRAPH_STAGING_PATH),
@@ -573,7 +567,7 @@ class GraphIndexer:
         self._clear_checkpoint()
         stats = self.graph.get_stats()
         logger.info("=" * 60)
-        logger.info("✅ Индексация графа завершена успешно!")
+        logger.info("Индексация графа завершена успешно!")
         logger.info("=" * 60)
         logger.info("Узлов: %s, рёбер: %s", stats["nodes_count"], stats["edges_count"])
         logger.info("По типам узлов: %s", stats["nodes_by_type"])
@@ -655,7 +649,15 @@ def main():
         )
         indexer.index_all()
     except Exception as exc:
-        logger.error("❌ Ошибка при индексации графа: %s", exc, exc_info=True)
+        if "buffer pool" in str(exc).lower() or "buffer manager" in str(exc).lower():
+            logger.error(
+                "Ошибка Kuzu (нехватка памяти buffer pool): %s. "
+                "Для крупных конфигураций включите GRAPH_USE_STAGING=1 в профиле "
+                "или запустите index_graph_mp.py с флагом --staging.",
+                exc,
+            )
+        else:
+            logger.error("Ошибка при индексации графа: %s", exc, exc_info=True)
         sys.exit(1)
 
 

@@ -23,6 +23,64 @@ def _normalize_name(name: str) -> str:
     return name.replace("-", "_").replace(" ", "_")
 
 
+def _graph_index_cmd_body(name: str, *, extension: bool = False) -> str:
+    """Шаблон run_index_graph_*.cmd (STAGING, CLEAR_GRAPH, workers)."""
+    ext_line = "REM Граф только для выгрузки расширения (EXTENSION_GRAPHDB_PATH)\n" if extension else (
+        "REM Индексация только графа (без векторной БД)\n"
+        "REM Поддержка кеширования и чекпоинтов\n"
+    )
+    ext_flag = " --extension" if extension else ""
+    pause_block = "\npause\n" if extension else "\npause\n"
+    profile_block = ""
+    if not extension:
+        profile_block = f"""set PROJECT_PROFILE={name}
+set VECTORDB_PATH=%SCRIPT_DIR%projects\\{name}\\vectordb
+set GRAPHDB_PATH=%SCRIPT_DIR%projects\\{name}\\graphdb\\graph.db
+
+"""
+    else:
+        profile_block = f"set PROJECT_PROFILE={name}\n\n"
+
+    return f'''@echo off
+chcp 65001 >nul
+{ext_line}
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
+
+{profile_block}set "PYTHON=python"
+if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
+
+REM   CLEAR_GRAPH=1  - очистить граф перед индексацией
+REM   NO_CACHE=1     - игнорировать кэш сканирования
+REM   STAGING=1      - сбор в CSV, затем compact COPY (рекомендуется для крупных конфигураций)
+set "CLEAR_OPT="
+set "CACHE_OPT="
+set "STAGING_OPT="
+
+if defined CLEAR_GRAPH set "CLEAR_OPT=--clear"
+if defined NO_CACHE set "CACHE_OPT=--no-cache"
+if defined STAGING set "STAGING_OPT=--staging"
+
+set "WORKERS_OPT="
+if defined INDEX_GRAPH_WORKERS set "WORKERS_OPT=--workers %INDEX_GRAPH_WORKERS%"
+
+"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py"{ext_flag} %WORKERS_OPT% %CLEAR_OPT% %CACHE_OPT% %STAGING_OPT%
+{pause_block}'''
+
+
+def _large_config_env_block() -> str:
+    return """
+# === КРУПНАЯ КОНФИГУРАЦИЯ (БУХ, ERP и т.п.): staging + один worker ===
+GRAPH_USE_STAGING=1
+INDEX_GRAPH_WORKERS=1
+GRAPH_MODULE_CHUNK_SIZE=50
+GRAPH_WRITE_BATCH_SIZE=20
+GRAPH_CSV_BATCH_SIZE=25
+KUZU_BUFFER_POOL_SIZE=2147483648
+"""
+
+
 def create_project(
     name: str,
     config_path: str,
@@ -32,6 +90,7 @@ def create_project(
     add_mcp: bool = False,
     python_path: str = None,
     overwrite: bool = False,
+    large_config: bool = False,
 ):
     """Создаёт проект и все необходимые артефакты."""
     name = _normalize_name(name)
@@ -88,6 +147,8 @@ DEFAULT_SEARCH_LIMIT=5
 MAX_SEARCH_LIMIT=20
 LOG_LEVEL=INFO
 """
+    if large_config:
+        env_content += _large_config_env_block()
     env_file.write_text(env_content, encoding="utf-8")
     logger.success(f"Создан: {env_file}")
 
@@ -133,24 +194,7 @@ if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
     logger.success(f"Создан: {run_index_cmd}")
 
     run_index_graph_cmd = project_root / f"run_index_graph_{name}.cmd"
-    run_index_graph_content = f'''@echo off
-chcp 65001 >nul
-REM Индексация только графа {name}
-
-set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%"
-if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
-
-set PROJECT_PROFILE={name}
-set VECTORDB_PATH=%SCRIPT_DIR%projects\\{name}\\vectordb
-set GRAPHDB_PATH=%SCRIPT_DIR%projects\\{name}\\graphdb\\graph.db
-
-set "PYTHON=python"
-if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
-
-"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" --clear
-'''
-    run_index_graph_cmd.write_text(run_index_graph_content, encoding="utf-8")
+    run_index_graph_cmd.write_text(_graph_index_cmd_body(name), encoding="utf-8")
     logger.success(f"Создан: {run_index_graph_cmd}")
 
     run_ext_vec = project_root / f"run_index_extension_vector_{name}.cmd"
@@ -175,34 +219,7 @@ if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
     logger.success(f"Создан: {run_ext_vec}")
 
     run_ext_graph = project_root / f"run_index_extension_graph_{name}.cmd"
-    run_ext_graph.write_text(
-        f'''@echo off
-chcp 65001 >nul
-REM Граф только для выгрузки расширения (EXTENSION_GRAPHDB_PATH)
-
-set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%"
-if exist "%SCRIPT_DIR%local.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%SCRIPT_DIR%local.env") do if "%%a"=="VECTOR_PYTHON_PATH" set "VECTOR_PYTHON_PATH=%%b"
-
-set PROJECT_PROFILE={name}
-
-set "PYTHON=python"
-if defined VECTOR_PYTHON_PATH set "PYTHON=%VECTOR_PYTHON_PATH%"
-
-set "CLEAR_OPT="
-if defined CLEAR_GRAPH set "CLEAR_OPT=--clear"
-set "CACHE_OPT="
-if defined NO_CACHE set "CACHE_OPT=--no-cache"
-
-set "WORKERS_OPT="
-if defined INDEX_GRAPH_WORKERS set "WORKERS_OPT=--workers %INDEX_GRAPH_WORKERS%"
-
-"%PYTHON%" "%SCRIPT_DIR%index_graph_mp.py" --extension %WORKERS_OPT% %CLEAR_OPT% %CACHE_OPT%
-
-pause
-''',
-        encoding="utf-8",
-    )
+    run_ext_graph.write_text(_graph_index_cmd_body(name, extension=True), encoding="utf-8")
     logger.success(f"Создан: {run_ext_graph}")
 
     run_ext_full = project_root / f"run_index_extension_full_{name}.cmd"
@@ -405,6 +422,8 @@ def main():
     parser.add_argument("--add-mcp", action="store_true", help="Добавить в mcp_config.json")
     parser.add_argument("--index", action="store_true", help="Запустить индексацию")
     parser.add_argument("--python-path", help="Путь к python.exe (или env VECTOR_PYTHON_PATH)")
+    parser.add_argument("--large-config", action="store_true",
+                        help="Рекомендуемые настройки для крупных конфигураций (GRAPH_USE_STAGING=1)")
     parser.add_argument("-y", "--yes", action="store_true", help="Перезаписать без подтверждения")
 
     args = parser.parse_args()
@@ -430,6 +449,7 @@ def main():
         add_mcp=args.add_mcp,
         python_path=args.python_path,
         overwrite=args.yes,
+        large_config=args.large_config,
     )
     sys.exit(0 if success else 1)
 

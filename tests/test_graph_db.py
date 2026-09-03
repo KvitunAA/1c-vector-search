@@ -452,6 +452,14 @@ class TestCsvUnsafeRowsGoRowwise:
         assert not GraphDBManager._row_needs_rowwise(
             {"id": "n1", "name": "Номенклатура", "synonym": "Товары", "extra": ""}
         )
+        assert not GraphDBManager._row_needs_rowwise(
+            {
+                "source": "metadata:Roles:R1",
+                "target": "metadata:Catalogs:N",
+                "edge_type": "HAS_RIGHT",
+                "extra": '{"rights": "Read,Insert", "ref": "Catalog.N"}',
+            }
+        )
 
 
 class TestGraphLockAndReadOnly:

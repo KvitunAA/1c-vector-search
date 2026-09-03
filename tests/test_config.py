@@ -110,6 +110,26 @@ class TestConfigCollections:
         assert Config.METADATA_TYPES["МакетСКД"] == "Templates"
 
 
+class TestConfigGraphIndexing:
+    """Настройки индексации графа из профиля."""
+
+    def test_graph_use_staging_true(self, monkeypatch):
+        monkeypatch.setenv("GRAPH_USE_STAGING", "true")
+        monkeypatch.setenv("PROJECT_PROFILE", "default")
+        import importlib
+        import config
+        importlib.reload(config)
+        assert config.Config.GRAPH_USE_STAGING is True
+
+    def test_index_graph_workers_from_env(self, monkeypatch):
+        monkeypatch.setenv("INDEX_GRAPH_WORKERS", "3")
+        monkeypatch.setenv("PROJECT_PROFILE", "default")
+        import importlib
+        import config
+        importlib.reload(config)
+        assert config.Config.INDEX_GRAPH_WORKERS == 3
+
+
 class TestConfigChunking:
     """Настройки чанкинга."""
 

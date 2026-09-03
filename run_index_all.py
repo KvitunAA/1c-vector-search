@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import List
 
 
 def _project_root() -> Path:
@@ -31,6 +32,27 @@ def _run(description: str, script: str, args: list) -> None:
     subprocess.run(cmd, cwd=str(root), check=True)
 
 
+def _graph_index_args(*, extension: bool = False) -> List[str]:
+    """Аргументы index_graph_mp.py из профиля (workers, staging)."""
+    sys.path.insert(0, str(_project_root()))
+    import importlib
+
+    import config
+
+    importlib.reload(config)
+    from config import Config
+
+    args: List[str] = []
+    if extension:
+        args.append("--extension")
+    args.append("--clear")
+    if Config.INDEX_GRAPH_WORKERS > 0:
+        args.extend(["--workers", str(Config.INDEX_GRAPH_WORKERS)])
+    if Config.GRAPH_USE_STAGING:
+        args.append("--staging")
+    return args
+
+
 def main() -> None:
     if not os.getenv("PROJECT_PROFILE"):
         print(
@@ -40,10 +62,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    workers_env = os.getenv("INDEX_GRAPH_WORKERS", "").strip()
-    graph_args = ["--clear"]
-    if workers_env:
-        graph_args.extend(["--workers", workers_env])
+    graph_args = _graph_index_args()
 
     _run(
         "[1/4] Основная конфигурация — векторная БД (sqlite-vec)",
@@ -79,13 +98,10 @@ def main() -> None:
         "run_indexer.py",
         ["--extension", "--clear", "--vector-only"],
     )
-    ext_graph_args = ["--extension", "--clear"]
-    if workers_env:
-        ext_graph_args.extend(["--workers", workers_env])
     _run(
         "[4/4] Расширение — граф зависимостей",
         "index_graph_mp.py",
-        ext_graph_args,
+        _graph_index_args(extension=True),
     )
     print()
     print("Готово: основная конфигурация и расширение проиндексированы.")

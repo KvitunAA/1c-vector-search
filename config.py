@@ -228,6 +228,16 @@ class Config:
     GRAPH_RELEASE_EVERY_N_BATCHES = int(os.getenv("GRAPH_RELEASE_EVERY_N_BATCHES", "4"))
     KUZU_BUFFER_POOL_SIZE = int(os.getenv("KUZU_BUFFER_POOL_SIZE", "0"))
 
+    _index_graph_workers_raw = os.getenv("INDEX_GRAPH_WORKERS", "").strip()
+    INDEX_GRAPH_WORKERS = (
+        int(_index_graph_workers_raw) if _index_graph_workers_raw.isdigit() else 0
+    )
+    GRAPH_USE_STAGING = os.getenv("GRAPH_USE_STAGING", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
     DEFAULT_SEARCH_LIMIT = int(os.getenv("DEFAULT_SEARCH_LIMIT", "5"))
     MAX_SEARCH_LIMIT = int(os.getenv("MAX_SEARCH_LIMIT", "20"))
 
@@ -296,6 +306,7 @@ class Config:
         logger.info(f"Лимит поиска по умолчанию: {cls.DEFAULT_SEARCH_LIMIT}")
         logger.info(f"Максимальный лимит поиска: {cls.MAX_SEARCH_LIMIT}")
         logger.info(f"Батчи индексации: код={cls.BATCH_SIZE_CODE}, метаданные={cls.BATCH_SIZE_METADATA}, формы={cls.BATCH_SIZE_FORMS}")
+        logger.info(f"Граф: staging={cls.GRAPH_USE_STAGING}, workers={cls.INDEX_GRAPH_WORKERS or 'auto'}")
         logger.info(f"Метрика расстояния: {cls.VECTOR_DISTANCE_METRIC}")
         logger.info(f"Гибридный поиск alpha: {cls.HYBRID_SEARCH_ALPHA}, MMR: {cls.SEARCH_USE_MMR}")
         logger.info(f"Уровень логирования: {cls.LOG_LEVEL}")
